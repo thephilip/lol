@@ -21,12 +21,22 @@ Commands:
   list                    List available checks
   status                  Show active session / context info
 
+omc passthrough (context-aware; logged to ledger when in a named context):
+  get <resource> [flags]  e.g. lol get pods -n openshift-etcd
+  describe <resource>     e.g. lol describe node worker-1
+  logs [flags] <pod>      e.g. lol logs -n openshift-etcd etcd-0
+  top [nodes|pods]
+  projects
+  extract
+  adm
+  alerts                  Shorthand for: omc get alerts -A
+
 Global flags:
   --context, -c <name>    Named context to create or use
   -h, --help              Show this help
   -v, --version           Show version
 
-Options for check:
+Options for check and omc passthrough:
   --no-log                Don't record this run to the context ledger
 
 Options for ready-up:
@@ -37,12 +47,13 @@ Examples:
   # Anonymous session — no ledger, no persistence beyond the mg path
   lol use /path/to/must-gather
   lol check etcd
+  lol get pods -n openshift-etcd
 
   # Named context — ledger kept, resumable, handoff-ready
   lol -c 04431153-GroupSync use /path/to/must-gather
   lol check etcd,nodes
-  lol -c 04431153-GroupSync use /path/to/second-inspect  # add another mg
-  lol check
+  lol alerts
+  lol get nodes
   lol ready-up -o handoff.md
 
   # Resume a context in a new session
@@ -467,6 +478,18 @@ cmd_ready_up() {
     emit ""
   fi
 
+  # Ad-hoc omc commands run during the investigation
+  local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+  if [[ -f "$cmd_log" ]]; then
+    emit "## Ad-hoc Commands"
+    emit ""
+    emit '```'
+    local cmd_content; cmd_content="$(cat "$cmd_log")"
+    $no_redact && emit "$cmd_content" || emit "$(scrub_pii "$cmd_content")"
+    emit '```'
+    emit ""
+  fi
+
   emit "## Open Questions"
   emit ""
   emit "_What still needs investigation:_"
@@ -490,6 +513,57 @@ cmd_ready_up() {
     ! $no_redact && echo && warn "Review for any remaining sensitive data before sharing." >&2
   fi
 }
+
+# ── omc passthrough ───────────────────────────────────────────────────────
+# Ensures omc context matches lol's active must-gather, then delegates.
+# When a named context is active, the command + output are appended to
+# commands.log inside the context directory for later reference / ready-up.
+cmd_omc_passthrough() {
+  local subcmd="$1"; shift
+
+  if ! command -v omc &>/dev/null; then
+    err "'omc' not found in PATH"
+    exit 2
+  fi
+
+  # Strip --no-log from args before handing the rest to omc
+  local no_log=false
+  local -a omc_args=()
+  for arg in "$@"; do
+    [[ "$arg" == "--no-log" ]] && no_log=true || omc_args+=("$arg")
+  done
+
+  local mg_path
+  mg_path="$(resolve_mg_path)" || exit 1
+  omc_use "$mg_path" || exit 2
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    local tmp_out; tmp_out="$(mktemp)"
+
+    omc "$subcmd" "${omc_args[@]}" >"$tmp_out" 2>&1 || rc=$?
+    cat "$tmp_out"
+
+    {
+      printf '[%s] $ omc %s %s\n' "$ts" "$subcmd" "${omc_args[*]:-}"
+      sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out"
+      printf '\n'
+    } >> "$cmd_log"
+
+    rm -f "$tmp_out"
+  else
+    omc "$subcmd" "${omc_args[@]}" || rc=$?
+  fi
+
+  return $rc
+}
+
+# Convenience: lol alerts → omc get alerts -A
+cmd_alerts() { cmd_omc_passthrough get alerts -A "$@"; }
 
 # ── Main ──────────────────────────────────────────────────────────────────
 main() {
@@ -531,6 +605,10 @@ main() {
     list)     cmd_list ;;
     status)   cmd_status ;;
     help)     usage ;;
+    # omc passthrough
+    get|describe|logs|extract|adm|projects|top)
+              cmd_omc_passthrough "$cmd" "${cmd_args[@]}" ;;
+    alerts)   cmd_alerts "${cmd_args[@]}" ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
   esac
 }
