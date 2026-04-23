@@ -24,6 +24,7 @@ lol v$VERSION — must-gather inspector
 Commands:
   use <path>              Set the active must-gather
   check [name,...]        Run checks (no args = all; comma-separated names for specific)
+  cluster                 Show cluster summary (version, ID, platform, URLs, network)
   context <sub>           Manage named contexts (list / resume / show)
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
@@ -523,6 +524,77 @@ cmd_ready_up() {
   fi
 }
 
+# ── cmd: cluster ──────────────────────────────────────────────────────────
+cmd_cluster() {
+  if ! command -v omc &>/dev/null; then
+    err "'omc' not found in PATH"
+    exit 2
+  fi
+
+  local mg_path
+  mg_path="$(resolve_mg_path)" || exit 1
+  omc_use "$mg_path" || exit 2
+
+  # ── ClusterVersion ────────────────────────────────────────────────────
+  local cv_json
+  cv_json="$(omc get clusterversion version -o json 2>/dev/null)" || cv_json="{}"
+
+  local cluster_id version channel phase
+  cluster_id="$(echo "$cv_json" | jq -r '.spec.clusterID     // "unknown"')"
+  version="$(   echo "$cv_json" | jq -r '.status.history[0].version // .status.desired.version // "unknown"')"
+  channel="$(   echo "$cv_json" | jq -r '.spec.channel        // "unknown"')"
+  phase="$(     echo "$cv_json" | jq -r '.status.history[0].state   // "unknown"')"
+
+  # ── Infrastructure ────────────────────────────────────────────────────
+  local infra_json
+  infra_json="$(omc get infrastructure cluster -o json 2>/dev/null)" || infra_json="{}"
+
+  local platform infra_name api_url region
+  platform="$(   echo "$infra_json" | jq -r '.status.platformStatus.type // "unknown"')"
+  infra_name="$( echo "$infra_json" | jq -r '.status.infrastructureName  // "unknown"')"
+  api_url="$(    echo "$infra_json" | jq -r '.status.apiServerURL         // "unknown"')"
+
+  # Region is platform-specific
+  region="$(echo "$infra_json" | jq -r '
+    .status.platformStatus |
+    (
+      .aws.region   //
+      .gcp.region   //
+      .azure.cloudName //
+      "n/a"
+    )')"
+
+  # ── Console ───────────────────────────────────────────────────────────
+  local console_url
+  console_url="$(omc get console cluster -o jsonpath='{.status.consoleURL}' 2>/dev/null)" \
+    || console_url="unknown"
+
+  # ── Network ───────────────────────────────────────────────────────────
+  local net_json network_type cluster_network service_network
+  net_json="$(omc get network cluster -o json 2>/dev/null)" || net_json="{}"
+  network_type="$(    echo "$net_json" | jq -r '.spec.networkType      // "unknown"')"
+  cluster_network="$( echo "$net_json" | jq -r '.spec.clusterNetwork[0].cidr // "unknown"')"
+  service_network="$( echo "$net_json" | jq -r '.spec.serviceNetwork[0]      // "unknown"')"
+
+  # ── Output ────────────────────────────────────────────────────────────
+  section "Cluster Summary"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Cluster ID:"    "$cluster_id"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Version:"       "$version ($phase)"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Channel:"       "$channel"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Platform:"      "$platform"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Region:"        "$region"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Infra name:"    "$infra_name"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "API URL:"       "$api_url"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Console:"       "$console_url"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Network type:"  "$network_type"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Cluster CIDR:"  "$cluster_network"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Service CIDR:"  "$service_network"
+  echo
+}
+
 # ── cmd: upgrade ──────────────────────────────────────────────────────────
 cmd_upgrade() {
   if ! command -v git &>/dev/null; then
@@ -655,6 +727,7 @@ main() {
     "")       if [[ -n "$LOL_CTX_NAME" ]]; then cmd_status; else usage; fi ;;
     use)      cmd_use      "${cmd_args[@]}" ;;
     check)    cmd_check    "${cmd_args[@]}" ;;
+    cluster)  cmd_cluster ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
     list)     cmd_list ;;
