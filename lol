@@ -14,6 +14,13 @@ SCRIPT_DIR="$(cd "$(dirname "$_lol_src")" && pwd)"
 unset _lol_src _lol_dir
 source "$SCRIPT_DIR/lib/common.sh"
 
+# Load user config before clankers so model/API overrides are in scope
+_lol_cfg="${LOL_CONFIG_DIR}/config.env"
+[[ -f "$_lol_cfg" ]] && source "$_lol_cfg"
+unset _lol_cfg
+
+source "$SCRIPT_DIR/lib/clankers.sh"
+
 VERSION="0.1.0"
 CHECKS_DIR="$SCRIPT_DIR/checks"
 
@@ -48,6 +55,12 @@ Global flags:
 
 Options for check and omc passthrough:
   --no-log                Don't record this run to the context ledger
+
+Options for check:
+  --with-clankers "query" Run a local AI analysis against the must-gather
+  --clankers-model <name> Model to use (default: gemma2:2b, env: LOL_CLANKERS_MODEL)
+                          If no check names are given, AI analysis runs without
+                          first running the standard checks.
 
 Options for ready-up:
   --no-redact             Skip PII scrubbing (for internal/self-hosted AI only)
@@ -366,38 +379,58 @@ run_checks() {
 cmd_check() {
   local -a check_names=()
   local no_log=false
+  local clankers_query=""
+  local clankers_model="$LOL_CLANKERS_MODEL"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --no-log) no_log=true; shift ;;
-      -*)       err "Unknown option: $1"; usage; exit 1 ;;
-      *)        IFS=',' read -ra _names <<< "$1"; check_names+=("${_names[@]}"); shift ;;
+      --no-log)          no_log=true; shift ;;
+      --with-clankers)   clankers_query="$2"; shift 2 ;;
+      --clankers-model)  clankers_model="$2"; shift 2 ;;
+      -*)                err "Unknown option: $1"; usage; exit 1 ;;
+      *)                 IFS=',' read -ra _names <<< "$1"; check_names+=("${_names[@]}"); shift ;;
     esac
   done
 
   local mg_path; mg_path="$(resolve_mg_path)" || exit 1
 
-  if [[ ${#check_names[@]} -eq 0 ]]; then
+  # --with-clankers with no explicit check names → AI-only, skip standard checks
+  local run_standard=true
+  if [[ -n "$clankers_query" && ${#check_names[@]} -eq 0 ]]; then
+    run_standard=false
+  fi
+
+  if $run_standard && [[ ${#check_names[@]} -eq 0 ]]; then
     read -ra check_names <<< "$(get_all_check_names)"
   fi
-  [[ ${#check_names[@]} -eq 0 ]] && { err "No checks found in $CHECKS_DIR"; exit 1; }
 
-  local log_file=""
-  if ! $no_log; then
-    local ctx; ctx="$(active_ctx)"
-    if [[ -n "$ctx" ]]; then
-      local runs_dir ts checks_slug
-      runs_dir="$(ctx_runs "$ctx")"
-      mkdir -p "$runs_dir"
-      ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-      checks_slug="$(IFS=+; echo "${check_names[*]}")"
-      log_file="$runs_dir/${ts}-${checks_slug}.txt"
-      ctx_set "$ctx" "UPDATED" "$ts"
+  if $run_standard; then
+    [[ ${#check_names[@]} -eq 0 ]] && { err "No checks found in $CHECKS_DIR"; exit 1; }
+
+    local log_file=""
+    if ! $no_log; then
+      local ctx; ctx="$(active_ctx)"
+      if [[ -n "$ctx" ]]; then
+        local runs_dir ts checks_slug
+        runs_dir="$(ctx_runs "$ctx")"
+        mkdir -p "$runs_dir"
+        ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+        checks_slug="$(IFS=+; echo "${check_names[*]}")"
+        log_file="$runs_dir/${ts}-${checks_slug}.txt"
+        ctx_set "$ctx" "UPDATED" "$ts"
+      fi
     fi
+
+    run_checks "$mg_path" "$log_file" "${check_names[@]}"
+    [[ -n "$log_file" ]] && info "Run saved: $log_file"
+  else
+    print_banner
   fi
 
-  run_checks "$mg_path" "$log_file" "${check_names[@]}"
-  [[ -n "$log_file" ]] && info "Run saved: $log_file"
+  # Run AI analysis if requested
+  if [[ -n "$clankers_query" ]]; then
+    clankers_run "$clankers_query" "$mg_path" "$clankers_model"
+  fi
 }
 
 # ── cmd: ready-up ─────────────────────────────────────────────────────────

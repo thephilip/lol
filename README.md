@@ -184,6 +184,35 @@ lol list
 
 ---
 
+## clankers — local AI analysis
+
+`--with-clankers` feeds a natural-language query to a local model via [ollama](https://ollama.ai), using targeted must-gather data as context.
+
+```bash
+# AI-only (no standard checks)
+lol check --with-clankers "Why are Marketplace pods CrashLooping"
+
+# Standard checks first, then AI analysis
+lol check etcd --with-clankers "is the disk latency related to the etcd issues?"
+
+# Different model
+lol check --with-clankers "What's wrong with ingress" --clankers-model llama3.2:3b
+```
+
+**Setup:**
+```bash
+# Install ollama: https://ollama.ai
+ollama pull gemma2:2b          # default model (~1.6 GB)
+```
+
+**Configuration** — create `~/.config/lol/config.env` to set persistent overrides:
+```bash
+LOL_CLANKERS_MODEL=llama3.2:3b
+LOL_CLANKERS_API=http://localhost:11434
+```
+
+lol infers the relevant namespace(s) from keywords in your query (`marketplace`, `etcd`, `ingress`, etc.) and gathers targeted pod status, warning events, and logs from problem pods. Broad cluster-level data (cluster operators, nodes, alerts) is used when no specific component is inferred. Context is capped to keep the prompt within small model limits.
+
 ## Contributing
 
 ### Adding a check
