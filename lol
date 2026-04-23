@@ -15,19 +15,18 @@ lol v$VERSION — must-gather inspector
 
 Commands:
   use <path>              Set the active must-gather
-  inspect [-c <checks>]   Run checks against the active must-gather
+  check [name,...]        Run checks (no args = all; comma-separated names for specific)
   context <sub>           Manage named contexts (list / resume / show)
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
   status                  Show active session / context info
 
 Global flags:
-  --context <name>        Named context to create or use
+  --context, -c <name>    Named context to create or use
   -h, --help              Show this help
   -v, --version           Show version
 
-Options for inspect:
-  -c, --check <name,...>  Checks to run (default: all)
+Options for check:
   --no-log                Don't record this run to the context ledger
 
 Options for ready-up:
@@ -37,18 +36,18 @@ Options for ready-up:
 Examples:
   # Anonymous session — no ledger, no persistence beyond the mg path
   lol use /path/to/must-gather
-  lol inspect -c etcd
+  lol check etcd
 
   # Named context — ledger kept, resumable, handoff-ready
-  lol --context=04431153-GroupSync use /path/to/must-gather
-  lol inspect -c etcd,nodes
-  lol --context=04431153-GroupSync use /path/to/second-inspect  # add another mg
-  lol inspect
+  lol -c 04431153-GroupSync use /path/to/must-gather
+  lol check etcd,nodes
+  lol -c 04431153-GroupSync use /path/to/second-inspect  # add another mg
+  lol check
   lol ready-up -o handoff.md
 
   # Resume a context in a new session
   lol context resume 04431153-GroupSync
-  lol inspect -c pdbs
+  lol check pdbs
   lol context list
 EOF
 }
@@ -266,7 +265,7 @@ cmd_context() {
   esac
 }
 
-# ── cmd: inspect ──────────────────────────────────────────────────────────
+# ── cmd: check ────────────────────────────────────────────────────────────
 get_all_check_names() {
   local names=()
   for f in "$CHECKS_DIR"/*.sh; do
@@ -294,7 +293,7 @@ run_checks() {
     exit 2
   fi
 
-  [[ -n "$log_file" ]] && printf '# lol inspect run\n# mg: %s\n# checks: %s\n\n' \
+  [[ -n "$log_file" ]] && printf '# lol check run\n# mg: %s\n# checks: %s\n\n' \
     "$mg_path" "${check_names[*]}" > "$log_file"
 
   for name in "${check_names[@]}"; do
@@ -343,15 +342,15 @@ run_checks() {
   [[ -n "$log_file" ]] && printf '\n--- SUMMARY ---\n%s\n' "$summary_text" >> "$log_file"
 }
 
-cmd_inspect() {
+cmd_check() {
   local -a check_names=()
   local no_log=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -c|--check) IFS=',' read -ra check_names <<< "$2"; shift 2 ;;
-      --no-log)   no_log=true; shift ;;
-      *) err "Unknown option: $1"; usage; exit 1 ;;
+      --no-log) no_log=true; shift ;;
+      -*)       err "Unknown option: $1"; usage; exit 1 ;;
+      *)        IFS=',' read -ra _names <<< "$1"; check_names+=("${_names[@]}"); shift ;;
     esac
   done
 
@@ -496,14 +495,14 @@ cmd_ready_up() {
 main() {
   [[ $# -eq 0 ]] && { usage; exit 0; }
 
-  # Extract global --context flag before dispatching subcommands
+  # Extract global flags before dispatching subcommands
   LOL_CTX_NAME=""
   local -a remaining=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --context=*) LOL_CTX_NAME="${1#--context=}"; shift ;;
-      --context)   LOL_CTX_NAME="$2"; shift 2 ;;
-      --help|-h)   usage; exit 0 ;;
+      --context|-c) LOL_CTX_NAME="$2"; shift 2 ;;
+      --help|-h)    usage; exit 0 ;;
       --version|-v) echo "lol v$VERSION"; exit 0 ;;
       *) remaining+=("$1"); shift ;;
     esac
@@ -525,7 +524,7 @@ main() {
 
   case "$cmd" in
     use)      cmd_use      "${cmd_args[@]}" ;;
-    inspect)  cmd_inspect  "${cmd_args[@]}" ;;
+    check)    cmd_check    "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
     list)     cmd_list ;;
