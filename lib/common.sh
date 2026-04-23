@@ -21,16 +21,32 @@ LOL_CONTEXTS_DIR="$LOL_CONFIG_DIR/contexts"          # named context ledgers
 
 # ── Output helpers ─────────────────────────────────────────────────────────
 print_banner() {
-  echo -e "${BOLD}${CYAN}"
-  cat <<'BANNER'
-  _         _
- | |       | |
- | |  ___  | |   Lots Of Logs inspector
- | | / _ \ | |   OpenShift must-gather edition
- | || (_) || |
- |_| \___/ |_|
-BANNER
-  echo -e "${RESET}"
+  # Plain fallback when color is not available
+  if [[ -z "$CYAN" ]]; then
+    printf '\nlol — Lots Of Logs inspector\n\n'
+    return
+  fi
+
+  local R='\033[0m' B='\033[1m'
+
+  # L columns: neon cyan → electric blue (top → bottom)
+  local l1='\033[38;5;51m'  l2='\033[38;5;45m'  l3='\033[38;5;39m'
+  local l4='\033[38;5;33m'  l5='\033[38;5;27m'  l6='\033[38;5;21m'
+
+  # O column: hot pink → deep purple (top → bottom)
+  local o1='\033[38;5;213m' o2='\033[38;5;207m' o3='\033[38;5;171m'
+  local o4='\033[38;5;135m' o5='\033[38;5;129m' o6='\033[38;5;93m'
+
+  printf '\n'
+  printf "  ${B}${l1}██╗     ${R}${B}${o1} ██████╗ ${R}${B}${l1}██╗     ${R}\n"
+  printf "  ${B}${l2}██║     ${R}${B}${o2}██╔═══██╗${R}${B}${l2}██║     ${R}\n"
+  printf "  ${B}${l3}██║     ${R}${B}${o3}██║   ██║${R}${B}${l3}██║     ${R}\n"
+  printf "  ${B}${l4}██║     ${R}${B}${o4}██║   ██║${R}${B}${l4}██║     ${R}\n"
+  printf "  ${B}${l5}███████╗${R}${B}${o5}╚██████╔╝${R}${B}${l5}███████╗${R}\n"
+  printf "  ${B}${l6}╚══════╝${R}${B}${o6} ╚═════╝ ${R}${B}${l6}╚══════╝${R}\n"
+  printf '\n'
+  printf '  \033[38;5;245m\033[2mLots Of Logs  ·  OpenShift must-gather inspector\033[0m\n'
+  printf '\n'
 }
 
 header()   { echo -e "${BOLD}==> $*${RESET}"; }
