@@ -16,62 +16,149 @@ lol v$VERSION — must-gather inspector
 Commands:
   use <path>              Set the active must-gather
   inspect [-c <checks>]   Run checks against the active must-gather
+  context <sub>           Manage named contexts (list / resume / show)
+  ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
-  status                  Show active must-gather path
+  status                  Show active session / context info
 
-Options:
-  -c, --check <name,...>  Checks to run (default: all). Used with inspect.
+Global flags:
+  --context <name>        Named context to create or use
   -h, --help              Show this help
   -v, --version           Show version
 
+Options for inspect:
+  -c, --check <name,...>  Checks to run (default: all)
+  --no-log                Don't record this run to the context ledger
+
+Options for ready-up:
+  --no-redact             Skip PII scrubbing (for internal/self-hosted AI only)
+  -o, --output <file>     Write to file instead of stdout
+
 Examples:
+  # Anonymous session — no ledger, no persistence beyond the mg path
   lol use /path/to/must-gather
-  lol inspect
   lol inspect -c etcd
-  lol inspect -c etcd,nodes,pdbs
-  lol list
-  lol status
+
+  # Named context — ledger kept, resumable, handoff-ready
+  lol --context=04431153-GroupSync use /path/to/must-gather
+  lol inspect -c etcd,nodes
+  lol --context=04431153-GroupSync use /path/to/second-inspect  # add another mg
+  lol inspect
+  lol ready-up -o handoff.md
+
+  # Resume a context in a new session
+  lol context resume 04431153-GroupSync
+  lol inspect -c pdbs
+  lol context list
 EOF
 }
 
-get_all_check_names() {
-  local names=()
-  for f in "$CHECKS_DIR"/*.sh; do
-    [[ -f "$f" ]] || continue
-    names+=("$(basename "$f" .sh)")
-  done
-  echo "${names[@]}"
+# ── Context storage helpers ────────────────────────────────────────────────
+ctx_dir()  { echo "$LOL_CONTEXTS_DIR/$1"; }
+ctx_meta() { echo "$LOL_CONTEXTS_DIR/$1/meta.env"; }
+ctx_runs() { echo "$LOL_CONTEXTS_DIR/$1/runs"; }
+ctx_hist() { echo "$LOL_CONTEXTS_DIR/$1/mg-history.log"; }
+
+ctx_exists() { [[ -f "$(ctx_meta "$1")" ]]; }
+
+ctx_get() {
+  local name="$1" key="$2"
+  local meta; meta="$(ctx_meta "$name")"
+  [[ -f "$meta" ]] && grep "^${key}=" "$meta" | cut -d= -f2- || echo ""
 }
 
+ctx_set() {
+  local name="$1" key="$2" value="$3"
+  local meta; meta="$(ctx_meta "$name")"
+  mkdir -p "$(ctx_dir "$name")/runs"
+  if [[ -f "$meta" ]] && grep -q "^${key}=" "$meta"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$meta"
+  else
+    echo "${key}=${value}" >> "$meta"
+  fi
+}
+
+active_ctx() {
+  [[ -f "$LOL_ACTIVE_CTX_FILE" ]] && cat "$LOL_ACTIVE_CTX_FILE" || echo ""
+}
+
+set_active_ctx() {
+  mkdir -p "$LOL_CONFIG_DIR"
+  echo "$1" > "$LOL_ACTIVE_CTX_FILE"
+}
+
+clear_active_ctx() { rm -f "$LOL_ACTIVE_CTX_FILE"; }
+
+# ── cmd: use ──────────────────────────────────────────────────────────────
 cmd_use() {
   local path="${1:-}"
-  if [[ -z "$path" ]]; then
-    err "Usage: lol use <must-gather-path>"
-    exit 1
+  [[ -z "$path" ]] && { err "Usage: lol use <must-gather-path>"; exit 1; }
+  [[ ! -d "$path" ]] && { err "Not a directory: $path"; exit 1; }
+
+  path="$(realpath "$path")"
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+  mkdir -p "$LOL_CONFIG_DIR"
+
+  if [[ -n "$LOL_CTX_NAME" ]]; then
+    local is_new=false
+    ctx_exists "$LOL_CTX_NAME" || is_new=true
+
+    ctx_set "$LOL_CTX_NAME" "NAME"       "$LOL_CTX_NAME"
+    ctx_set "$LOL_CTX_NAME" "CURRENT_MG" "$path"
+    ctx_set "$LOL_CTX_NAME" "UPDATED"    "$ts"
+    $is_new && ctx_set "$LOL_CTX_NAME" "CREATED" "$ts"
+
+    # Append to mg history
+    echo "${ts} ${path}" >> "$(ctx_hist "$LOL_CTX_NAME")"
+
+    set_active_ctx "$LOL_CTX_NAME"
+    echo "$path" > "$LOL_CONTEXT_FILE"
+
+    $is_new && ok "Context created: $LOL_CTX_NAME" || ok "Context updated: $LOL_CTX_NAME"
+  else
+    # Anonymous session — explicitly clear any active named context
+    clear_active_ctx
+    echo "$path" > "$LOL_CONTEXT_FILE"
+    ok "Anonymous session — no ledger will be kept"
   fi
-  if [[ ! -d "$path" ]]; then
-    err "Not a directory: $path"
-    exit 1
-  fi
-  mkdir -p "$(dirname "$LOL_CONTEXT_FILE")"
-  echo "$path" > "$LOL_CONTEXT_FILE"
+
   ok "Active must-gather: $path"
 }
 
+# ── cmd: status ───────────────────────────────────────────────────────────
 cmd_status() {
-  if [[ ! -f "$LOL_CONTEXT_FILE" ]]; then
-    info "No must-gather set. Run: lol use <path>"
-    return
-  fi
-  local path
-  path="$(cat "$LOL_CONTEXT_FILE")"
-  if [[ -d "$path" ]]; then
-    ok "Active must-gather: $path"
+  local ctx; ctx="$(active_ctx)"
+
+  if [[ -n "$ctx" ]]; then
+    header "Named context: $ctx"
+    echo -e "  ${BOLD}Created:${RESET}      $(ctx_get "$ctx" "CREATED")"
+    echo -e "  ${BOLD}Last updated:${RESET} $(ctx_get "$ctx" "UPDATED")"
+
+    local mg; mg="$(ctx_get "$ctx" "CURRENT_MG")"
+    if [[ -d "$mg" ]]; then
+      echo -e "  ${BOLD}Must-gather:${RESET}  $mg"
+    else
+      warn "  Must-gather path missing: $mg"
+    fi
+
+    local mg_count=0 run_count=0
+    [[ -f "$(ctx_hist "$ctx")" ]] && mg_count="$(wc -l < "$(ctx_hist "$ctx")" | tr -d ' ')"
+    [[ -d "$(ctx_runs "$ctx")" ]] && run_count="$(find "$(ctx_runs "$ctx")" -maxdepth 1 -name '*.txt' | wc -l | tr -d ' ')"
+    echo -e "  ${BOLD}Must-gathers:${RESET} $mg_count total"
+    echo -e "  ${BOLD}Runs logged:${RESET}  $run_count"
   else
-    warn "Active must-gather (directory missing): $path"
+    header "Anonymous session"
+    if [[ -f "$LOL_CONTEXT_FILE" ]]; then
+      local path; path="$(cat "$LOL_CONTEXT_FILE")"
+      [[ -d "$path" ]] && echo -e "  ${BOLD}Must-gather:${RESET} $path" \
+                       || warn "Must-gather path missing: $path"
+    else
+      info "No must-gather set. Run: lol use <path>"
+    fi
   fi
 }
 
+# ── cmd: list ─────────────────────────────────────────────────────────────
 cmd_list() {
   echo
   header "Available checks:"
@@ -85,12 +172,119 @@ cmd_list() {
   echo
 }
 
+# ── cmd: context ──────────────────────────────────────────────────────────
+cmd_context_list() {
+  if [[ ! -d "$LOL_CONTEXTS_DIR" ]] || [[ -z "$(ls -A "$LOL_CONTEXTS_DIR" 2>/dev/null)" ]]; then
+    info "No saved contexts. Create one with: lol --context=<name> use <path>"
+    return
+  fi
+
+  local cur_ctx; cur_ctx="$(active_ctx)"
+  echo
+  header "Saved contexts:"
+
+  for dir in "$LOL_CONTEXTS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    local name; name="$(basename "$dir")"
+    local updated mg run_count mg_count
+    updated="$(ctx_get   "$name" "UPDATED")"
+    mg="$(ctx_get        "$name" "CURRENT_MG")"
+    run_count=0; mg_count=0
+    [[ -d "$dir/runs" ]] && run_count="$(find "$dir/runs" -maxdepth 1 -name '*.txt' | wc -l | tr -d ' ')"
+    [[ -f "$(ctx_hist "$name")" ]] && mg_count="$(wc -l < "$(ctx_hist "$name")" | tr -d ' ')"
+
+    local active_marker=""
+    [[ "$name" == "$cur_ctx" ]] && active_marker=" ${CYAN}← active${RESET}"
+
+    printf "  ${BOLD}%-38s${RESET} updated:%-22s  runs:%-3s  mgs:%-2s%b\n" \
+      "$name" "${updated:-unknown}" "$run_count" "$mg_count" "$active_marker"
+  done
+  echo
+}
+
+cmd_context_resume() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && { err "Usage: lol context resume <name>"; exit 1; }
+  ctx_exists "$name" || { err "Context not found: $name"; info "Run: lol context list"; exit 1; }
+
+  local mg; mg="$(ctx_get "$name" "CURRENT_MG")"
+  set_active_ctx "$name"
+  mkdir -p "$LOL_CONFIG_DIR"
+  echo "$mg" > "$LOL_CONTEXT_FILE"
+
+  ok "Resumed context: $name"
+  [[ -d "$mg" ]] && ok "Active must-gather: $mg" || warn "Must-gather path missing: $mg"
+}
+
+cmd_context_show() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    name="$(active_ctx)"
+    [[ -z "$name" ]] && { err "No active context. Pass a name or run: lol context resume <name>"; exit 1; }
+  fi
+  ctx_exists "$name" || { err "Context not found: $name"; exit 1; }
+
+  header "Context: $name"
+  echo -e "  ${BOLD}Created:${RESET}  $(ctx_get "$name" "CREATED")"
+  echo -e "  ${BOLD}Updated:${RESET}  $(ctx_get "$name" "UPDATED")"
+  echo
+
+  local hist; hist="$(ctx_hist "$name")"
+  if [[ -f "$hist" ]]; then
+    header "Must-gather history:"
+    local i=0
+    while IFS= read -r line; do
+      ((i++)) || true
+      local ts_entry path_entry
+      ts_entry="$(echo "$line" | cut -d' ' -f1)"
+      path_entry="$(echo "$line" | cut -d' ' -f2-)"
+      local cur_mg; cur_mg="$(ctx_get "$name" "CURRENT_MG")"
+      local marker=""; [[ "$path_entry" == "$cur_mg" ]] && marker=" ${CYAN}← current${RESET}"
+      printf "  %2d. %s  %b%b\n" "$i" "$ts_entry" "$path_entry" "$marker"
+    done < "$hist"
+    echo
+  fi
+
+  local runs_dir; runs_dir="$(ctx_runs "$name")"
+  if [[ -d "$runs_dir" ]] && compgen -G "$runs_dir/*.txt" &>/dev/null; then
+    header "Inspection runs:"
+    for f in "$runs_dir"/*.txt; do
+      [[ -f "$f" ]] || continue
+      echo "  $(basename "$f" .txt)"
+    done
+    echo
+  fi
+}
+
+cmd_context() {
+  local subcmd="${1:-list}"; shift || true
+  case "$subcmd" in
+    list)   cmd_context_list ;;
+    resume) cmd_context_resume "$@" ;;
+    show)   cmd_context_show "$@" ;;
+    *) err "Unknown context subcommand: '$subcmd'"; usage; exit 1 ;;
+  esac
+}
+
+# ── cmd: inspect ──────────────────────────────────────────────────────────
+get_all_check_names() {
+  local names=()
+  for f in "$CHECKS_DIR"/*.sh; do
+    [[ -f "$f" ]] || continue
+    names+=("$(basename "$f" .sh)")
+  done
+  echo "${names[@]}"
+}
+
 run_checks() {
-  local mg_path="$1"; shift
+  local mg_path="$1" log_file="$2"; shift 2
   local -a check_names=("$@")
   local findings=0 errors=0
 
   print_banner
+
+  local ctx; ctx="$(active_ctx)"
+  [[ -n "$ctx" ]] && info "Context:     $ctx" || info "Session:     anonymous (no ledger)"
   info "Must-gather: $mg_path"
   info "Checks:      ${check_names[*]}"
   echo
@@ -99,6 +293,9 @@ run_checks() {
     err "'omc' not found in PATH — required for must-gather inspection"
     exit 2
   fi
+
+  [[ -n "$log_file" ]] && printf '# lol inspect run\n# mg: %s\n# checks: %s\n\n' \
+    "$mg_path" "${check_names[*]}" > "$log_file"
 
   for name in "${check_names[@]}"; do
     local check_file="$CHECKS_DIR/${name}.sh"
@@ -110,7 +307,21 @@ run_checks() {
 
     section "CHECK: $name"
     local rc=0
-    bash "$check_file" "$mg_path" || rc=$?
+
+    if [[ -n "$log_file" ]]; then
+      # Capture output to temp file; display with colors, log without ANSI codes
+      local tmp_out; tmp_out="$(mktemp)"
+      LOL_FORCE_COLOR=1 bash "$check_file" "$mg_path" > "$tmp_out" 2>&1 || rc=$?
+      cat "$tmp_out"
+      { printf '\n--- CHECK: %s ---\n\n' "$name"
+        sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out"
+        echo
+      } >> "$log_file"
+      rm -f "$tmp_out"
+    else
+      bash "$check_file" "$mg_path" || rc=$?
+    fi
+
     echo
 
     if   [[ $rc -eq 1 ]]; then ((findings++)) || true
@@ -119,54 +330,207 @@ run_checks() {
   done
 
   section "SUMMARY"
+  local summary_text
   if [[ $findings -eq 0 && $errors -eq 0 ]]; then
-    ok "All ${#check_names[@]} check(s) passed — no issues found"
+    summary_text="All ${#check_names[@]} check(s) passed — no issues found"
+    ok "$summary_text"
   else
-    [[ $findings -gt 0 ]] && warn "$findings check(s) reported findings"
-    [[ $errors   -gt 0 ]] && err  "$errors check(s) encountered errors"
+    [[ $findings -gt 0 ]] && { summary_text="$findings check(s) reported findings"; warn "$summary_text"; }
+    [[ $errors   -gt 0 ]] && { summary_text="${summary_text:+$summary_text, }$errors check(s) errored"; err  "$summary_text"; }
   fi
   echo
+
+  [[ -n "$log_file" ]] && printf '\n--- SUMMARY ---\n%s\n' "$summary_text" >> "$log_file"
 }
 
 cmd_inspect() {
   local -a check_names=()
+  local no_log=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -c|--check) IFS=',' read -ra check_names <<< "$2"; shift 2 ;;
+      --no-log)   no_log=true; shift ;;
       *) err "Unknown option: $1"; usage; exit 1 ;;
     esac
   done
 
-  local mg_path
-  mg_path="$(resolve_mg_path)" || exit 1
+  local mg_path; mg_path="$(resolve_mg_path)" || exit 1
 
   if [[ ${#check_names[@]} -eq 0 ]]; then
     read -ra check_names <<< "$(get_all_check_names)"
   fi
+  [[ ${#check_names[@]} -eq 0 ]] && { err "No checks found in $CHECKS_DIR"; exit 1; }
 
-  if [[ ${#check_names[@]} -eq 0 ]]; then
-    err "No checks found in $CHECKS_DIR"
+  local log_file=""
+  if ! $no_log; then
+    local ctx; ctx="$(active_ctx)"
+    if [[ -n "$ctx" ]]; then
+      local runs_dir ts checks_slug
+      runs_dir="$(ctx_runs "$ctx")"
+      mkdir -p "$runs_dir"
+      ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+      checks_slug="$(IFS=+; echo "${check_names[*]}")"
+      log_file="$runs_dir/${ts}-${checks_slug}.txt"
+      ctx_set "$ctx" "UPDATED" "$ts"
+    fi
+  fi
+
+  run_checks "$mg_path" "$log_file" "${check_names[@]}"
+  [[ -n "$log_file" ]] && info "Run saved: $log_file"
+}
+
+# ── cmd: ready-up ─────────────────────────────────────────────────────────
+cmd_ready_up() {
+  local no_redact=false out_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-redact)       no_redact=true; shift ;;
+      -o|--output)       out_file="$2"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  local ctx; ctx="$(active_ctx)"
+  if [[ -z "$ctx" ]]; then
+    err "ready-up requires a named context — no active context found."
+    info "Run: lol context resume <name>"
     exit 1
   fi
 
-  run_checks "$mg_path" "${check_names[@]}"
-}
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+  local -a lines=()
 
-main() {
-  if [[ $# -eq 0 ]]; then
-    usage; exit 0
+  emit() { lines+=("$1"); }
+
+  emit "# Case Handoff: ${ctx}"
+  emit ""
+  if ! $no_redact; then
+    emit "> ⚠️  PII scrubbing applied (IPs, UUIDs, emails, cluster URLs)."
+    emit "> **Review this document before sharing with any external service.**"
+    emit ""
+  fi
+  emit "> Generated by lol v${VERSION} at ${ts}"
+  emit ""
+  emit "## Context"
+  emit ""
+  emit "- **Case/Context:** \`${ctx}\`"
+  emit "- **Created:**      $(ctx_get "$ctx" "CREATED")"
+  emit "- **Last updated:** $(ctx_get "$ctx" "UPDATED")"
+  emit ""
+
+  local hist; hist="$(ctx_hist "$ctx")"
+  if [[ -f "$hist" ]]; then
+    emit "### Must-gathers analyzed"
+    emit ""
+    while IFS= read -r line; do
+      local ts_entry path_entry
+      ts_entry="$(echo "$line" | cut -d' ' -f1)"
+      path_entry="$(echo "$line" | cut -d' ' -f2-)"
+      if $no_redact; then
+        emit "- \`${path_entry}\` — ${ts_entry}"
+      else
+        emit "- \`[REDACTED:path]\` — ${ts_entry}"
+      fi
+    done < "$hist"
+    emit ""
   fi
 
-  local cmd="$1"; shift
+  # Investigation timeline — one section per run log
+  local runs_dir; runs_dir="$(ctx_runs "$ctx")"
+  if [[ -d "$runs_dir" ]] && compgen -G "$runs_dir/*.txt" &>/dev/null; then
+    emit "## Investigation Timeline"
+    emit ""
+    for f in "$runs_dir"/*.txt; do
+      [[ -f "$f" ]] || continue
+      emit "### $(basename "$f" .txt)"
+      emit ""
+      emit '```'
+      local content; content="$(cat "$f")"
+      $no_redact && emit "$content" || emit "$(scrub_pii "$content")"
+      emit '```'
+      emit ""
+    done
+
+    # Aggregate findings across all runs
+    emit "## Findings Summary"
+    emit ""
+    local all_findings
+    all_findings="$(grep -h -E '\[(FINDING|CRITICAL|WARN)\]' "$runs_dir"/*.txt 2>/dev/null \
+      | sed 's/\x1b\[[0-9;]*[mK]//g' | sort -u)" || all_findings=""
+
+    if [[ -n "$all_findings" ]]; then
+      $no_redact && emit "$all_findings" || emit "$(scrub_pii "$all_findings")"
+    else
+      emit "_No findings recorded in run logs._"
+    fi
+    emit ""
+  fi
+
+  emit "## Open Questions"
+  emit ""
+  emit "_What still needs investigation:_"
+  emit ""
+  emit "-"
+  emit ""
+  emit "## Suggested Next Steps"
+  emit ""
+  emit "_Describe what to investigate next, or ask the AI to suggest based on findings above._"
+  emit ""
+
+  local doc
+  doc="$(printf '%s\n' "${lines[@]}")"
+
+  if [[ -n "$out_file" ]]; then
+    printf '%s\n' "$doc" > "$out_file"
+    ok "Handoff written to: $out_file"
+    ! $no_redact && warn "Review for any remaining sensitive data before sharing."
+  else
+    printf '%s\n' "$doc"
+    ! $no_redact && echo && warn "Review for any remaining sensitive data before sharing." >&2
+  fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────
+main() {
+  [[ $# -eq 0 ]] && { usage; exit 0; }
+
+  # Extract global --context flag before dispatching subcommands
+  LOL_CTX_NAME=""
+  local -a remaining=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context=*) LOL_CTX_NAME="${1#--context=}"; shift ;;
+      --context)   LOL_CTX_NAME="$2"; shift 2 ;;
+      --help|-h)   usage; exit 0 ;;
+      --version|-v) echo "lol v$VERSION"; exit 0 ;;
+      *) remaining+=("$1"); shift ;;
+    esac
+  done
+  export LOL_CTX_NAME
+
+  # If --context was given without a 'use', auto-resume that context
+  if [[ -n "$LOL_CTX_NAME" ]] && [[ "${remaining[0]:-}" != "use" ]]; then
+    if ctx_exists "$LOL_CTX_NAME"; then
+      local mg; mg="$(ctx_get "$LOL_CTX_NAME" "CURRENT_MG")"
+      set_active_ctx "$LOL_CTX_NAME"
+      mkdir -p "$LOL_CONFIG_DIR"
+      echo "$mg" > "$LOL_CONTEXT_FILE"
+    fi
+  fi
+
+  local cmd="${remaining[0]:-}"
+  local -a cmd_args=("${remaining[@]:1}")
 
   case "$cmd" in
-    use)              cmd_use "$@" ;;
-    inspect)          cmd_inspect "$@" ;;
-    list)             cmd_list ;;
-    status)           cmd_status ;;
-    version|--version|-v) echo "lol v$VERSION" ;;
-    help|--help|-h)   usage ;;
+    use)      cmd_use      "${cmd_args[@]}" ;;
+    inspect)  cmd_inspect  "${cmd_args[@]}" ;;
+    context)  cmd_context  "${cmd_args[@]}" ;;
+    ready-up) cmd_ready_up "${cmd_args[@]}" ;;
+    list)     cmd_list ;;
+    status)   cmd_status ;;
+    help)     usage ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
   esac
 }
