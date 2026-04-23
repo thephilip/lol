@@ -20,6 +20,7 @@ Commands:
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
   status                  Show active session / context info
+  upgrade                 Pull the latest version from origin/main
 
 omc passthrough (context-aware; logged to ledger when in a named context):
   get <resource> [flags]  e.g. lol get pods -n openshift-etcd
@@ -514,6 +515,52 @@ cmd_ready_up() {
   fi
 }
 
+# ── cmd: upgrade ──────────────────────────────────────────────────────────
+cmd_upgrade() {
+  if ! command -v git &>/dev/null; then
+    err "git not found in PATH — cannot self-upgrade"
+    exit 1
+  fi
+
+  local remote="origin"
+  local branch="main"
+
+  # Confirm this is a git repo with a remote
+  if ! git -C "$SCRIPT_DIR" remote get-url "$remote" &>/dev/null; then
+    err "No '$remote' remote found. Is this a git clone?"
+    exit 1
+  fi
+
+  # Warn if there are local modifications
+  if ! git -C "$SCRIPT_DIR" diff --quiet || ! git -C "$SCRIPT_DIR" diff --cached --quiet; then
+    warn "You have local modifications — upgrade may conflict."
+    read -rp "Continue anyway? [y/N] " confirm
+    [[ "${confirm,,}" == "y" ]] || { info "Upgrade cancelled."; exit 0; }
+  fi
+
+  local before
+  before="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)"
+
+  info "Fetching from $remote/$branch ..."
+  git -C "$SCRIPT_DIR" fetch "$remote" "$branch" --quiet
+
+  local after
+  after="$(git -C "$SCRIPT_DIR" rev-parse --short "$remote/$branch")"
+
+  if [[ "$before" == "$after" ]]; then
+    ok "Already up to date ($before)"
+    return
+  fi
+
+  info "Updating $before → $after"
+  git -C "$SCRIPT_DIR" merge --ff-only "$remote/$branch" --quiet
+
+  ok "Upgraded to $after"
+  echo
+  info "Changes:"
+  git -C "$SCRIPT_DIR" log --oneline "${before}..HEAD"
+}
+
 # ── omc passthrough ───────────────────────────────────────────────────────
 # Ensures omc context matches lol's active must-gather, then delegates.
 # When a named context is active, the command + output are appended to
@@ -604,6 +651,7 @@ main() {
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
     list)     cmd_list ;;
     status)   cmd_status ;;
+    upgrade)  cmd_upgrade ;;
     help)     usage ;;
     # omc passthrough
     get|describe|logs|extract|adm|projects|top)
