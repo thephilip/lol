@@ -109,12 +109,28 @@ lol projects
 
 ## Installation
 
-`lol` has no build step. Clone the repo and symlink or add to `$PATH`:
+```bash
+git clone https://github.com/thephilip/lol.git
+bash lol/install.sh
+```
+
+The install script will:
+
+1. Clone the repo to `~/.local/share/lol/` (overridable via `$LOL_INSTALL_DIR`)
+2. Symlink `~/.local/bin/lol` → the clone (overridable via `$LOL_BIN_DIR`)
+3. Warn if `~/.local/bin` is not in your `$PATH`
+
+Because the install directory is a git clone, `lol upgrade` works out of the box.
+
+**Uninstall:**
 
 ```bash
-git clone https://github.com/<you>/lol.git ~/tools/lol
-echo 'export PATH="$HOME/tools/lol:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+bash install.sh --uninstall
 ```
+
+This removes the symlink and optionally the install directory and context data.
+
+> **Note:** `lol` is a directory-based tool — `lib/`, `checks/`, and `signatures/` must live alongside the `lol` executable. Do not copy just the `lol` file on its own.
 
 ### Dependencies
 
