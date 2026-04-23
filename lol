@@ -3,7 +3,15 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the real script location, following any symlinks
+_lol_src="${BASH_SOURCE[0]}"
+while [[ -L "$_lol_src" ]]; do
+  _lol_dir="$(cd "$(dirname "$_lol_src")" && pwd)"
+  _lol_src="$(readlink "$_lol_src")"
+  [[ "$_lol_src" != /* ]] && _lol_src="$_lol_dir/$_lol_src"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_lol_src")" && pwd)"
+unset _lol_src _lol_dir
 source "$SCRIPT_DIR/lib/common.sh"
 
 VERSION="0.1.0"
