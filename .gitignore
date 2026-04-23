@@ -1,0 +1,12 @@
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Local test must-gathers (don't accidentally commit huge directories)
+must-gather*/
+mg-*/

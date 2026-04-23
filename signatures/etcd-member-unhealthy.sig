@@ -1,0 +1,10 @@
+NAME=etcd-member-unhealthy
+SEVERITY=critical
+SUMMARY=One or more etcd members are unhealthy or quorum is at risk — cluster may be unable to accept writes
+PATTERN=etcdMembersNotReady
+PATTERN=etcdNoLeader
+PATTERN=etcdInsufficientMembers
+PATTERN=member.*unstarted
+PATTERN=failed to send.*snapshot
+PATTERN=cluster ID mismatch
+REMEDIATION=Check etcd pods on all control plane nodes. If a member is permanently failed, follow the etcd member replacement procedure: https://docs.openshift.com/container-platform/latest/backup_and_restore/control_plane_backup_and_restore/replacing-an-unhealthy-etcd-member.html

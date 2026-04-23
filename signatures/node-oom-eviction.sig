@@ -1,0 +1,9 @@
+NAME=node-oom-eviction
+SEVERITY=warning
+SUMMARY=Pods are being OOMKilled or evicted due to memory/resource pressure on node(s)
+PATTERN=OOMKill
+PATTERN=OOMKilled
+PATTERN=Evict
+PATTERN=MemoryPressure
+PATTERN=eviction.*threshold
+REMEDIATION=Identify which pods are being evicted/OOMKilled and review their memory limits. Check if nodes are over-committed. Consider adding nodes, adjusting resource requests/limits, or enabling VPA. Review if any workload had unexpected memory growth.

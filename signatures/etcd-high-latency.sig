@@ -1,0 +1,11 @@
+NAME=etcd-high-latency
+SEVERITY=warning
+SUMMARY=etcd is experiencing high fsync/WAL latency, typically caused by slow disk I/O on control plane nodes
+PATTERN=slow fdatasync
+PATTERN=took too long.*leader
+PATTERN=etcdserver.*request.*timeout
+PATTERN=heartbeat.*timeout
+PATTERN=leader.*changed
+PATTERN=etcdHighFsyncDurations
+PATTERN=etcdHighCommitDurations
+REMEDIATION=Check disk I/O on control plane nodes (iostat, fio). etcd is extremely sensitive to disk latency. Move the etcd data dir to faster storage (NVMe preferred). Ensure no other disk-intensive workloads share the same device.
