@@ -523,6 +523,7 @@ main() {
   local -a cmd_args=("${remaining[@]:1}")
 
   case "$cmd" in
+    "")       if [[ -n "$LOL_CTX_NAME" ]]; then cmd_status; else usage; fi ;;
     use)      cmd_use      "${cmd_args[@]}" ;;
     check)    cmd_check    "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
