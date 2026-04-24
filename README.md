@@ -1,7 +1,7 @@
 # lol — Lots Of Logs
 
 > A must-gather inspector for OpenShift / ROSA.
-> Named in the proud tradition of [`omg`](https://github.com/ryane/omg) and [`omc`](https://github.com/gmeghnag/omc). We regret nothing.
+> Named in the proud tradition of [`omg`](https://github.com/ryane/omg) and [`omc`](https://github.com/gmeghnag/omc).
 
 `lol` is a Bash CLI that wraps [`omc`](https://github.com/gmeghnag/omc) with persistent **named contexts**, automated **check runs**, **signature-based issue fingerprinting**, and an AI-ready **handoff document** generator. It is designed for support engineers and SREs who spend a lot of time digging through must-gather bundles.
 
