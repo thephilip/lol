@@ -130,8 +130,8 @@ The context-matching flow when you pass `--cluster`:
 The following commands query live data from OCM. They work with or without a must-gather — the cluster ID is read from the must-gather if available, then from the active context's stored cluster ID.
 
 ```bash
-lol alerts                  # live firing alerts
-lol service-log             # recent service log entries (newest first)
+lol alerts                  # alert state from the active must-gather
+lol service-log             # recent service log entries via OCM (newest first)
 lol service-log --size 50   # fetch more entries (default: 20)
 lol limited-support         # check for limited support reasons
 ```
@@ -287,7 +287,7 @@ Some commands query live cluster data via [`ocm`](https://github.com/openshift-o
 
 | Command | Requires `ocm` | What it fetches |
 |---------|:--------------:|-----------------|
-| `lol alerts` | Yes | Live firing alerts from OCM |
+| `lol alerts` | No | Alert state from the active must-gather (via `omc`) |
 | `lol service-log` | Yes | Recent service log entries posted by Red Hat for the cluster |
 | `lol limited-support` | Yes | Whether the cluster has limited support reasons on record |
 | Everything else | No | Fully offline — works against any must-gather |

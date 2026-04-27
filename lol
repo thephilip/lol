@@ -40,7 +40,7 @@ Commands:
   version                 Show version, commit, and available releases
 
 ocm commands (require ocm login; logged to ledger when in a named context):
-  alerts                  Live alerts for the active cluster
+  alerts                  Show alert state from the active must-gather
   service-log [--size N]  Recent service log entries (default: 20)
   limited-support         Check whether the cluster has limited support reasons
 
@@ -1088,43 +1088,51 @@ cmd_omc_passthrough() {
   return $rc
 }
 
-# cmd: alerts — fetch live alerts via OCM for the active cluster
+# cmd: alerts — show alert state from the active must-gather
+# Prometheus alerts are not exposed via the OCM API; this command reads
+# from the must-gather snapshot. Use lol service-log for OCM-sourced data.
 cmd_alerts() {
-  if ! command -v ocm &>/dev/null; then
-    err "'ocm' not found in PATH — required for lol alerts"
-    exit 2
-  fi
-
-  local cluster_id
-  cluster_id="$(resolve_cluster_id)" || exit 1
-
   local no_log=false
   local -a extra_args=()
   for arg in "$@"; do
     [[ "$arg" == "--no-log" ]] && no_log=true || extra_args+=("$arg")
   done
 
+  local mg_path
+  if ! mg_path="$(resolve_mg_path 2>/dev/null)" || [[ ! -d "$mg_path" ]]; then
+    err "lol alerts requires an active must-gather."
+    info "Tip: lol use <must-gather-path>  — load a must-gather to view alerts"
+    info "     lol service-log              — view Red Hat service log entries via OCM"
+    exit 1
+  fi
+
+  if ! command -v omc &>/dev/null; then
+    err "'omc' not found in PATH"
+    exit 2
+  fi
+
+  omc_use "$mg_path" || exit 2
+
   local ctx; ctx="$(active_ctx)"
   local rc=0
-  local endpoint="/api/clusters_mgmt/v1/clusters/${cluster_id}/alerts"
 
   if ! $no_log && [[ -n "$ctx" ]]; then
     local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
     local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
     local tmp_out; tmp_out="$(mktemp)"
 
-    ocm get "$endpoint" "${extra_args[@]}" >"$tmp_out" 2>&1 || rc=$?
+    omc get alerts -A "${extra_args[@]}" >"$tmp_out" 2>&1 || rc=$?
     cat "$tmp_out"
 
     {
-      printf '[%s] $ ocm get alerts (cluster: %s)\n' "$ts" "$cluster_id"
-      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '[%s] $ omc get alerts -A\n' "$ts"
+      sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out"
       printf '\n'
     } >> "$cmd_log"
 
     rm -f "$tmp_out"
   else
-    ocm get "$endpoint" "${extra_args[@]}" || rc=$?
+    omc get alerts -A "${extra_args[@]}" || rc=$?
   fi
 
   return $rc
