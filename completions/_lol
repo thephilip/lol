@@ -59,7 +59,12 @@ _lol() {
             '--no-log[do not record this run to the context ledger]' \
             '--size[number of entries to fetch (default\: 20)]:count'
           ;;
-        alerts|limited-support)
+        alerts)
+          _arguments \
+            '--no-log[do not record this run to the context ledger]' \
+            '--all[include inactive alerts (default: firing and pending only)]'
+          ;;
+        limited-support)
           _arguments \
             '--no-log[do not record this run to the context ledger]'
           ;;

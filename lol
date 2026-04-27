@@ -40,7 +40,7 @@ Commands:
   version                 Show version, commit, and available releases
 
 ocm commands (require ocm login; logged to ledger when in a named context):
-  alerts                  Show alert state from the active must-gather
+  alerts [--all]          Show firing/pending alerts from the must-gather (--all for inactive too)
   service-log [--size N]  Recent service log entries (default: 20)
   limited-support         Check whether the cluster has limited support reasons
 
@@ -1088,14 +1088,19 @@ cmd_omc_passthrough() {
   return $rc
 }
 
-# cmd: alerts — show alert state from the active must-gather
-# Prometheus alerts are not exposed via the OCM API; this command reads
-# from the must-gather snapshot. Use lol service-log for OCM-sourced data.
+# cmd: alerts — show firing/pending alerts from the active must-gather
+# Uses omc prometheus alertrule, which reads monitoring/alerts.json or
+# monitoring/prometheus/rules.json from the must-gather snapshot.
+# Pass --all to include inactive alerts. Extra args are forwarded to omc.
 cmd_alerts() {
-  local no_log=false
+  local no_log=false all=false
   local -a extra_args=()
   for arg in "$@"; do
-    [[ "$arg" == "--no-log" ]] && no_log=true || extra_args+=("$arg")
+    case "$arg" in
+      --no-log) no_log=true ;;
+      --all)    all=true ;;
+      *)        extra_args+=("$arg") ;;
+    esac
   done
 
   local mg_path
@@ -1113,6 +1118,10 @@ cmd_alerts() {
 
   omc_use "$mg_path" || exit 2
 
+  local -a omc_cmd=(omc prometheus alertrule)
+  $all || omc_cmd+=(-s firing,pending)
+  [[ ${#extra_args[@]} -gt 0 ]] && omc_cmd+=("${extra_args[@]}")
+
   local ctx; ctx="$(active_ctx)"
   local rc=0
 
@@ -1121,18 +1130,18 @@ cmd_alerts() {
     local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
     local tmp_out; tmp_out="$(mktemp)"
 
-    omc get alerts -A "${extra_args[@]}" >"$tmp_out" 2>&1 || rc=$?
+    "${omc_cmd[@]}" >"$tmp_out" 2>&1 || rc=$?
     cat "$tmp_out"
 
     {
-      printf '[%s] $ omc get alerts -A\n' "$ts"
+      printf '[%s] $ %s\n' "$ts" "${omc_cmd[*]}"
       sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out"
       printf '\n'
     } >> "$cmd_log"
 
     rm -f "$tmp_out"
   else
-    omc get alerts -A "${extra_args[@]}" || rc=$?
+    "${omc_cmd[@]}" || rc=$?
   fi
 
   return $rc
