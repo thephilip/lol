@@ -720,9 +720,9 @@ _cluster_display_ocm() {
   printf "  ${BOLD}%-20s${RESET} %s\n" "API URL:"      "$api_url"
   printf "  ${BOLD}%-20s${RESET} %s\n" "Console:"      "$console_url"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Master nodes:" "$master_nodes"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Infra nodes:"  "$infra_nodes"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Compute nodes:""$compute_nodes"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Master nodes:"  "$master_nodes"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Infra nodes:"   "$infra_nodes"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Compute nodes:" "$compute_nodes"
   echo
   printf "  ${BOLD}%-20s${RESET} %s\n" "Created:"      "$created_at"
   echo
@@ -790,14 +790,49 @@ _cluster_set() {
 
   # ── CASE 3: active context exists but has no cluster ID yet ────────────
   if [[ -n "$cur_ctx" && -z "$cur_cluster_id" ]]; then
-    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-    ctx_set "$cur_ctx" "CLUSTER_ID" "$external_id"
-    ctx_set "$cur_ctx" "OCM_ID"     "$ocm_id"
-    ctx_set "$cur_ctx" "UPDATED"    "$ts"
-    ok "Cluster set in context '$cur_ctx': $external_id"
     echo
-    _cluster_display_ocm "$cluster_json"
-    return
+    info "Active context '${cur_ctx}' has no cluster set."
+    echo "  [1] Associate this cluster with '${cur_ctx}'"
+    echo "  [2] Create a new context for ${cluster_name}"
+    echo "  [3] Show info without saving"
+    echo
+    read -rp "  Choice [1]: " choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+      3)
+        info "Showing cluster info — not saved to context"
+        echo
+        _cluster_display_ocm "$cluster_json"
+        return
+        ;;
+      2)
+        echo
+        read -rp "  Context name [${cluster_name}]: " ctx_input
+        ctx_input="${ctx_input:-$cluster_name}"
+        local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+        ctx_set "$ctx_input" "NAME"       "$ctx_input"
+        ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
+        ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
+        ctx_set "$ctx_input" "CREATED"    "$ts"
+        ctx_set "$ctx_input" "UPDATED"    "$ts"
+        set_active_ctx "$ctx_input"
+        ok "Created and activated context: $ctx_input"
+        echo
+        _cluster_display_ocm "$cluster_json"
+        return
+        ;;
+      *)
+        local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+        ctx_set "$cur_ctx" "CLUSTER_ID" "$external_id"
+        ctx_set "$cur_ctx" "OCM_ID"     "$ocm_id"
+        ctx_set "$cur_ctx" "UPDATED"    "$ts"
+        ok "Cluster associated with context '${cur_ctx}'"
+        echo
+        _cluster_display_ocm "$cluster_json"
+        return
+        ;;
+    esac
   fi
 
   # ── CASE 4: no active context — must create one ────────────────────────
