@@ -1172,7 +1172,7 @@ cmd_service_log() {
 
   section "Service Log: $cluster_id"
 
-  ocm get /api/service_logs/v1/cluster_logs \
+  ocm get /api/service_logs/v1/clusters/cluster_logs \
     --parameter "search=cluster_uuid='${cluster_id}'" \
     --parameter "orderBy=timestamp desc" \
     --parameter "size=${size}" >"$tmp_out" 2>&1 || rc=$?
