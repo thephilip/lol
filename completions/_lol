@@ -33,6 +33,7 @@ _lol() {
         context)
           local -a ctx_subcmds
           ctx_subcmds=(
+            'new:create and activate a new empty context'
             'list:list all saved contexts'
             'resume:resume a saved context'
             'show:show details of a context'

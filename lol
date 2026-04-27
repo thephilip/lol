@@ -32,7 +32,7 @@ Commands:
   use <path>              Set the active must-gather
   check [name,...]        Run checks (no args = all; comma-separated names for specific)
   cluster [-C <id>]       Show cluster summary; -C/--cluster sets cluster via OCM
-  context <sub>           Manage named contexts (list / resume / show / rm)
+  context <sub>           Manage named contexts (new / list / resume / show / rm)
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
   status                  Show active session / context info
@@ -370,6 +370,31 @@ cmd_context_show() {
   fi
 }
 
+cmd_context_new() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    read -rp "  Context name: " name
+    [[ -z "$name" ]] && { err "Context name cannot be empty."; exit 1; }
+  fi
+
+  if ctx_exists "$name"; then
+    warn "Context '$name' already exists."
+    read -rp "  Resume it instead? [Y/n] " resp
+    [[ "${resp,,}" == "n" ]] && { info "Cancelled."; exit 0; }
+    cmd_context_resume "$name"
+    return
+  fi
+
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+  ctx_set "$name" "NAME"    "$name"
+  ctx_set "$name" "CREATED" "$ts"
+  ctx_set "$name" "UPDATED" "$ts"
+  set_active_ctx "$name"
+
+  ok "Created and activated context: $name"
+  info "Next: lol use <must-gather-path>  or  lol cluster --cluster <id>"
+}
+
 cmd_context_rm() {
   local name="${1:-}"
   [[ -z "$name" ]] && { err "Usage: lol context rm <name>"; exit 1; }
@@ -397,6 +422,7 @@ cmd_context_rm() {
 cmd_context() {
   local subcmd="${1:-list}"; shift || true
   case "$subcmd" in
+    new)    cmd_context_new    "$@" ;;
     list)   cmd_context_list ;;
     resume) cmd_context_resume "$@" ;;
     show)   cmd_context_show "$@" ;;
