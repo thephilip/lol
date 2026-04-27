@@ -102,9 +102,32 @@ lol top nodes
 lol projects
 ```
 
+### cluster
+
+`lol cluster` shows a summary of the active cluster. It works in two modes:
+
+**From a must-gather** (existing behaviour):
+```bash
+lol cluster
+```
+
+**From OCM directly** — no must-gather needed:
+```bash
+lol cluster --cluster <id>   # external UUID, OCM internal ID, or cluster name
+lol cluster -C <id>          # short form
+```
+
+Using `--cluster` looks the cluster up in OCM, stores the cluster ID in the active context (or walks you through creating one), and displays a live summary. Once set, `lol cluster` without any flag will use the stored ID as a fallback if no must-gather is available.
+
+The context-matching flow when you pass `--cluster`:
+1. If the cluster matches another saved context → offer to resume it
+2. If the active context has no cluster set yet → store it there
+3. If there is no active context → prompt to create and name one
+4. If the active context tracks a different cluster → offer to create a new context or view without saving (useful for comparing two clusters)
+
 ### OCM commands
 
-The following commands query live data from OCM using the cluster ID embedded in the active must-gather. They require `ocm` to be installed and authenticated — see [OCM integration](#ocm-integration).
+The following commands query live data from OCM. They work with or without a must-gather — the cluster ID is read from the must-gather if available, then from the active context's stored cluster ID.
 
 ```bash
 lol alerts                  # live firing alerts
@@ -113,7 +136,7 @@ lol service-log --size 50   # fetch more entries (default: 20)
 lol limited-support         # check for limited support reasons
 ```
 
-All OCM commands are logged to `commands.log` when a named context is active, with PII scrubbed before writing.
+All OCM commands require `ocm` to be installed and authenticated — see [OCM integration](#ocm-integration). Output is logged to `commands.log` when a named context is active, with PII scrubbed before writing.
 
 ### ready-up
 

@@ -68,7 +68,11 @@ _lol() {
             '--no-log[do not record this run to the context ledger]' \
             '*: :_default'
           ;;
-        cluster|list|status|upgrade|reset|version) ;;
+        cluster)
+          _arguments \
+            '(-C --cluster)'{-C,--cluster}'[set active cluster via OCM]:cluster ID or name'
+          ;;
+        list|status|upgrade|reset|version) ;;
       esac
       ;;
   esac

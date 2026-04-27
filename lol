@@ -31,7 +31,7 @@ lol v$VERSION — must-gather inspector
 Commands:
   use <path>              Set the active must-gather
   check [name,...]        Run checks (no args = all; comma-separated names for specific)
-  cluster                 Show cluster summary (version, ID, platform, URLs, network)
+  cluster [-C <id>]       Show cluster summary; -C/--cluster sets cluster via OCM
   context <sub>           Manage named contexts (list / resume / show)
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
@@ -124,6 +124,75 @@ active_ctx() {
   [[ -f "$LOL_ACTIVE_CTX_FILE" ]] && cat "$LOL_ACTIVE_CTX_FILE" || echo ""
 }
 
+# resolve_cluster_id — external UUID of the active cluster
+#   Priority: must-gather ClusterVersion → context CLUSTER_ID
+resolve_cluster_id() {
+  local cluster_id=""
+
+  local mg_path
+  if mg_path="$(resolve_mg_path 2>/dev/null)" && [[ -d "$mg_path" ]]; then
+    if command omc use "$mg_path" &>/dev/null 2>&1; then
+      cluster_id="$(omc get clusterversion version \
+        -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
+    fi
+  fi
+
+  if [[ -z "$cluster_id" ]]; then
+    local ctx; ctx="$(active_ctx)"
+    [[ -n "$ctx" ]] && cluster_id="$(ctx_get "$ctx" "CLUSTER_ID")"
+  fi
+
+  if [[ -z "$cluster_id" ]]; then
+    err "No cluster ID available."
+    info "Tip: lol cluster --cluster <id>  — set a cluster via OCM (no must-gather needed)"
+    info "     lol use <must-gather-path>  — set via must-gather"
+    return 1
+  fi
+
+  echo "$cluster_id"
+}
+
+# resolve_ocm_id — OCM internal cluster ID from external UUID
+#   Checks context cache first to avoid redundant API calls
+resolve_ocm_id() {
+  local cluster_id="$1"
+
+  local ctx; ctx="$(active_ctx)"
+  if [[ -n "$ctx" ]]; then
+    local cached; cached="$(ctx_get "$ctx" "OCM_ID")"
+    [[ -n "$cached" ]] && { echo "$cached"; return; }
+  fi
+
+  local ocm_id
+  ocm_id="$(ocm get /api/clusters_mgmt/v1/clusters \
+    --parameter "search=external_id='${cluster_id}'" \
+    --parameter size=1 2>/dev/null | jq -r '.items[0].id // empty')"
+
+  if [[ -z "$ocm_id" ]]; then
+    err "Could not resolve OCM internal ID for cluster: $cluster_id"
+    info "Ensure you are logged in: ocm whoami"
+    return 1
+  fi
+
+  echo "$ocm_id"
+}
+
+# _cluster_find_ctx_by_id — returns the name of any saved context whose
+#   CLUSTER_ID matches, excluding the currently active context
+_cluster_find_ctx_by_id() {
+  local target_id="$1"
+  local cur_ctx; cur_ctx="$(active_ctx)"
+  [[ ! -d "$LOL_CONTEXTS_DIR" ]] && return
+  local dir
+  for dir in "$LOL_CONTEXTS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    local name; name="$(basename "$dir")"
+    [[ "$name" == "$cur_ctx" ]] && continue
+    local stored; stored="$(ctx_get "$name" "CLUSTER_ID")"
+    [[ "$stored" == "$target_id" ]] && { echo "$name"; return; }
+  done
+}
+
 set_active_ctx() {
   mkdir -p "$LOL_CONFIG_DIR"
   echo "$1" > "$LOL_ACTIVE_CTX_FILE"
@@ -179,9 +248,12 @@ cmd_status() {
     local mg; mg="$(ctx_get "$ctx" "CURRENT_MG")"
     if [[ -d "$mg" ]]; then
       echo -e "  ${BOLD}Must-gather:${RESET}  $mg"
-    else
+    elif [[ -n "$mg" ]]; then
       warn "  Must-gather path missing: $mg"
     fi
+
+    local cid; cid="$(ctx_get "$ctx" "CLUSTER_ID")"
+    [[ -n "$cid" ]] && echo -e "  ${BOLD}Cluster ID:${RESET}   $cid"
 
     local mg_count=0 run_count=0
     [[ -f "$(ctx_hist "$ctx")" ]] && mg_count="$(wc -l < "$(ctx_hist "$ctx")" | tr -d ' ')"
@@ -566,8 +638,258 @@ cmd_ready_up() {
   fi
 }
 
+# ── OCM cluster helpers ────────────────────────────────────────────────────
+
+# _ocm_lookup_cluster <id-or-name>
+#   Accepts: external UUID, OCM internal ID, or cluster name.
+#   Prints the cluster JSON object on success; returns 1 if not found.
+_ocm_lookup_cluster() {
+  local input="$1"
+  local json=""
+
+  if [[ "$input" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    json="$(ocm get /api/clusters_mgmt/v1/clusters \
+      --parameter "search=external_id='${input}'" \
+      --parameter size=1 2>/dev/null | jq -r '.items[0] // empty')"
+  fi
+
+  if [[ -z "$json" || "$json" == "null" ]]; then
+    local direct
+    direct="$(ocm get "/api/clusters_mgmt/v1/clusters/${input}" 2>/dev/null)"
+    if [[ -n "$direct" ]] && ! echo "$direct" | jq -e '.kind == "Error"' &>/dev/null; then
+      json="$direct"
+    fi
+  fi
+
+  if [[ -z "$json" || "$json" == "null" ]]; then
+    json="$(ocm get /api/clusters_mgmt/v1/clusters \
+      --parameter "search=name='${input}'" \
+      --parameter size=1 2>/dev/null | jq -r '.items[0] // empty')"
+  fi
+
+  [[ -z "$json" || "$json" == "null" ]] && return 1
+  echo "$json"
+}
+
+# _cluster_display_ocm <cluster-json>
+#   Polished cluster summary from OCM data, with coloured state indicator.
+_cluster_display_ocm() {
+  local json="$1"
+
+  local name external_id ocm_id version state product
+  local platform region multi_az api_url console_url
+  local master_nodes infra_nodes compute_nodes created_at
+
+  name="$(         echo "$json" | jq -r '.name                          // "unknown"')"
+  external_id="$(  echo "$json" | jq -r '.external_id                   // "unknown"')"
+  ocm_id="$(       echo "$json" | jq -r '.id                            // "unknown"')"
+  version="$(      echo "$json" | jq -r '.openshift_version             // "unknown"')"
+  state="$(        echo "$json" | jq -r '.status.state                  // "unknown"')"
+  product="$(      echo "$json" | jq -r '.product.id                    // "unknown"')"
+  platform="$(     echo "$json" | jq -r '.cloud_provider.id             // "unknown"' | tr '[:lower:]' '[:upper:]')"
+  region="$(       echo "$json" | jq -r '.region.id                     // "unknown"')"
+  multi_az="$(     echo "$json" | jq -r '.multi_az                      // false')"
+  api_url="$(      echo "$json" | jq -r '.api.url                       // "unknown"')"
+  console_url="$(  echo "$json" | jq -r '.console.url                   // "unknown"')"
+  master_nodes="$( echo "$json" | jq -r '.nodes.master                  // "unknown"')"
+  infra_nodes="$(  echo "$json" | jq -r '.nodes.infra                   // "unknown"')"
+  compute_nodes="$(echo "$json" | jq -r '.nodes.compute                 // "unknown"')"
+  created_at="$(   echo "$json" | jq -r '.creation_timestamp[0:19]      // "unknown"')"
+
+  local state_str
+  case "$state" in
+    ready)                        state_str="${GREEN}${state}${RESET}" ;;
+    installing|updating|pending*) state_str="${YELLOW}${state}${RESET}" ;;
+    error|uninstalling|degraded)  state_str="${RED}${state}${RESET}" ;;
+    *)                            state_str="${DIM}${state}${RESET}" ;;
+  esac
+
+  section "Cluster: $name"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Name:"         "$name"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "External ID:"  "$external_id"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "OCM ID:"       "$ocm_id"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Version:"      "$version"
+  printf "  ${BOLD}%-20s${RESET} $(echo -e "${state_str}")\n" "State:"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Product:"      "$(echo "$product" | tr '[:lower:]' '[:upper:]')"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Platform:"     "$platform"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Region:"       "$region"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Multi-AZ:"     "$multi_az"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "API URL:"      "$api_url"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Console:"      "$console_url"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Master nodes:" "$master_nodes"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Infra nodes:"  "$infra_nodes"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Compute nodes:""$compute_nodes"
+  echo
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Created:"      "$created_at"
+  echo
+}
+
+# _cluster_set <id-or-name>
+#   Full interactive flow for lol cluster --cluster <id>
+_cluster_set() {
+  local input_id="$1"
+
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol cluster --cluster"
+    exit 2
+  fi
+  if ! command -v jq &>/dev/null; then
+    err "'jq' not found in PATH — required for lol cluster --cluster"
+    exit 2
+  fi
+
+  info "Looking up cluster in OCM: $input_id"
+  local cluster_json
+  cluster_json="$(_ocm_lookup_cluster "$input_id")" || {
+    err "Cluster not found in OCM: $input_id"
+    info "Try: external UUID, OCM internal ID, or cluster name"
+    exit 1
+  }
+
+  local external_id ocm_id cluster_name
+  external_id="$(  echo "$cluster_json" | jq -r '.external_id // empty')"
+  ocm_id="$(       echo "$cluster_json" | jq -r '.id          // empty')"
+  cluster_name="$( echo "$cluster_json" | jq -r '.name        // empty')"
+
+  local cur_ctx; cur_ctx="$(active_ctx)"
+  local cur_cluster_id=""
+  [[ -n "$cur_ctx" ]] && cur_cluster_id="$(ctx_get "$cur_ctx" "CLUSTER_ID")"
+
+  # ── CASE 1: already tracking this cluster in the active context ────────
+  if [[ -n "$cur_cluster_id" && "$cur_cluster_id" == "$external_id" ]]; then
+    ok "Context '$cur_ctx' already tracks this cluster."
+    echo
+    _cluster_display_ocm "$cluster_json"
+    return
+  fi
+
+  # ── CASE 2: another saved context already tracks this cluster ──────────
+  local matching_ctx
+  matching_ctx="$(_cluster_find_ctx_by_id "$external_id")"
+
+  if [[ -n "$matching_ctx" ]]; then
+    echo
+    info "Context '${matching_ctx}' already tracks this cluster."
+    read -rp "  Resume '${matching_ctx}'? [Y/n] " resp
+    if [[ "${resp,,}" != "n" ]]; then
+      local mg; mg="$(ctx_get "$matching_ctx" "CURRENT_MG")"
+      set_active_ctx "$matching_ctx"
+      mkdir -p "$LOL_CONFIG_DIR"
+      echo "$mg" > "$LOL_CONTEXT_FILE"
+      ok "Resumed context: $matching_ctx"
+      echo
+      _cluster_display_ocm "$cluster_json"
+      return
+    fi
+    echo
+  fi
+
+  # ── CASE 3: active context exists but has no cluster ID yet ────────────
+  if [[ -n "$cur_ctx" && -z "$cur_cluster_id" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    ctx_set "$cur_ctx" "CLUSTER_ID" "$external_id"
+    ctx_set "$cur_ctx" "OCM_ID"     "$ocm_id"
+    ctx_set "$cur_ctx" "UPDATED"    "$ts"
+    ok "Cluster set in context '$cur_ctx': $external_id"
+    echo
+    _cluster_display_ocm "$cluster_json"
+    return
+  fi
+
+  # ── CASE 4: no active context — must create one ────────────────────────
+  if [[ -z "$cur_ctx" ]]; then
+    echo
+    read -rp "  Context name [${cluster_name}]: " ctx_input
+    ctx_input="${ctx_input:-$cluster_name}"
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    ctx_set "$ctx_input" "NAME"       "$ctx_input"
+    ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
+    ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
+    ctx_set "$ctx_input" "CREATED"    "$ts"
+    ctx_set "$ctx_input" "UPDATED"    "$ts"
+    set_active_ctx "$ctx_input"
+    ok "Created and activated context: $ctx_input"
+    echo
+    _cluster_display_ocm "$cluster_json"
+    return
+  fi
+
+  # ── CASE 5: active context tracks a different cluster — offer options ──
+  echo
+  warn "Context '${cur_ctx}' tracks a different cluster (${cur_cluster_id})."
+  echo
+  echo "  [1] Create a new context for ${cluster_name}"
+  echo "  [2] Show info in current context (no changes saved)"
+  echo
+  read -rp "  Choice [1]: " choice
+  choice="${choice:-1}"
+
+  case "$choice" in
+    2)
+      info "Showing cluster info — not saved to context"
+      echo
+      _cluster_display_ocm "$cluster_json"
+      ;;
+    *)
+      echo
+      read -rp "  Context name [${cluster_name}]: " ctx_input
+      ctx_input="${ctx_input:-$cluster_name}"
+      local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+      ctx_set "$ctx_input" "NAME"       "$ctx_input"
+      ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
+      ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
+      ctx_set "$ctx_input" "CREATED"    "$ts"
+      ctx_set "$ctx_input" "UPDATED"    "$ts"
+      set_active_ctx "$ctx_input"
+      ok "Created and activated context: $ctx_input"
+      echo
+      _cluster_display_ocm "$cluster_json"
+      ;;
+  esac
+}
+
 # ── cmd: cluster ──────────────────────────────────────────────────────────
 cmd_cluster() {
+  local set_cluster=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cluster|-C) set_cluster="$2"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  # ── --cluster flag: interactive OCM set flow ───────────────────────────
+  if [[ -n "$set_cluster" ]]; then
+    _cluster_set "$set_cluster"
+    return
+  fi
+
+  # ── No must-gather: fall back to OCM via stored CLUSTER_ID ────────────
+  if ! resolve_mg_path &>/dev/null 2>&1; then
+    if ! command -v ocm &>/dev/null; then
+      err "No must-gather set and 'ocm' not found in PATH."
+      info "Tip: lol use <must-gather-path>"
+      info "     lol cluster --cluster <id>  — query via OCM (requires ocm login)"
+      exit 1
+    fi
+    local cluster_id
+    cluster_id="$(resolve_cluster_id)" || exit 1
+    local ocm_id
+    ocm_id="$(resolve_ocm_id "$cluster_id")" || exit 1
+    local cluster_json
+    cluster_json="$(ocm get "/api/clusters_mgmt/v1/clusters/${ocm_id}" 2>/dev/null)" || {
+      err "Failed to fetch cluster info from OCM"
+      exit 1
+    }
+    _cluster_display_ocm "$cluster_json"
+    info "Tip: lol cluster --cluster <id>  — switch clusters or query without a must-gather"
+    return
+  fi
+
   if ! command -v omc &>/dev/null; then
     err "'omc' not found in PATH"
     exit 2
@@ -596,7 +918,6 @@ cmd_cluster() {
   infra_name="$( echo "$infra_json" | jq -r '.status.infrastructureName  // "unknown"')"
   api_url="$(    echo "$infra_json" | jq -r '.status.apiServerURL         // "unknown"')"
 
-  # Region is platform-specific
   region="$(echo "$infra_json" | jq -r '
     .status.platformStatus |
     (
@@ -635,6 +956,7 @@ cmd_cluster() {
   printf "  ${BOLD}%-20s${RESET} %s\n" "Cluster CIDR:"  "$cluster_network"
   printf "  ${BOLD}%-20s${RESET} %s\n" "Service CIDR:"  "$service_network"
   echo
+  info "Tip: lol cluster --cluster <id>  — switch clusters or query without a must-gather"
 }
 
 # ── cmd: upgrade ──────────────────────────────────────────────────────────
@@ -731,23 +1053,15 @@ cmd_omc_passthrough() {
   return $rc
 }
 
-# cmd: alerts — fetch live alerts via OCM for the active must-gather's cluster
+# cmd: alerts — fetch live alerts via OCM for the active cluster
 cmd_alerts() {
   if ! command -v ocm &>/dev/null; then
     err "'ocm' not found in PATH — required for lol alerts"
     exit 2
   fi
 
-  local mg_path
-  mg_path="$(resolve_mg_path)" || exit 1
-  omc_use "$mg_path" || exit 2
-
   local cluster_id
-  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
-  if [[ -z "$cluster_id" ]]; then
-    err "Could not determine cluster ID from must-gather"
-    exit 1
-  fi
+  cluster_id="$(resolve_cluster_id)" || exit 1
 
   local no_log=false
   local -a extra_args=()
@@ -788,16 +1102,8 @@ cmd_service_log() {
     exit 2
   fi
 
-  local mg_path
-  mg_path="$(resolve_mg_path)" || exit 1
-  omc_use "$mg_path" || exit 2
-
   local cluster_id
-  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
-  if [[ -z "$cluster_id" ]]; then
-    err "Could not determine cluster ID from must-gather"
-    exit 1
-  fi
+  cluster_id="$(resolve_cluster_id)" || exit 1
 
   local no_log=false size=20
   while [[ $# -gt 0 ]]; do
@@ -850,16 +1156,8 @@ cmd_limited_support() {
     exit 2
   fi
 
-  local mg_path
-  mg_path="$(resolve_mg_path)" || exit 1
-  omc_use "$mg_path" || exit 2
-
   local cluster_id
-  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
-  if [[ -z "$cluster_id" ]]; then
-    err "Could not determine cluster ID from must-gather"
-    exit 1
-  fi
+  cluster_id="$(resolve_cluster_id)" || exit 1
 
   local no_log=false
   while [[ $# -gt 0 ]]; do
@@ -869,19 +1167,8 @@ cmd_limited_support() {
     esac
   done
 
-  # OCM uses an internal cluster ID distinct from the external UUID in ClusterVersion.
-  # Resolve it via a search on external_id before querying the limited support endpoint.
-  local lookup_json ocm_id
-  lookup_json="$(ocm get /api/clusters_mgmt/v1/clusters \
-    --parameter "search=external_id='${cluster_id}'" \
-    --parameter size=1 2>/dev/null)" || { err "Failed to look up cluster in OCM"; exit 1; }
-  ocm_id="$(echo "$lookup_json" | jq -r '.items[0].id // empty')"
-
-  if [[ -z "$ocm_id" ]]; then
-    err "Cluster not found in OCM (external_id: $cluster_id)"
-    info "Ensure you are logged in to the correct OCM environment: ocm whoami"
-    exit 1
-  fi
+  local ocm_id
+  ocm_id="$(resolve_ocm_id "$cluster_id")" || exit 1
 
   local ctx; ctx="$(active_ctx)"
   local rc=0
@@ -1038,7 +1325,7 @@ main() {
     "")       if [[ -n "$LOL_CTX_NAME" ]]; then cmd_status; else usage; fi ;;
     use)      cmd_use      "${cmd_args[@]}" ;;
     check)    cmd_check    "${cmd_args[@]}" ;;
-    cluster)  cmd_cluster ;;
+    cluster)  cmd_cluster  "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
     list)     cmd_list ;;
