@@ -37,6 +37,7 @@ Commands:
   list                    List available checks
   status                  Show active session / context info
   upgrade                 Pull the latest version from origin/main
+  version                 Show version, commit, and available releases
 
 ocm commands (require ocm login; logged to ledger when in a named context):
   alerts                  Live alerts for the active cluster
@@ -919,6 +920,49 @@ cmd_limited_support() {
   return $rc
 }
 
+# ── cmd: version ─────────────────────────────────────────────────────────
+cmd_version() {
+  print_banner
+
+  section "Version info"
+  printf "  ${BOLD}%-18s${RESET} v%s\n" "Version:" "$VERSION"
+
+  if command -v git &>/dev/null && \
+     git -C "$SCRIPT_DIR" rev-parse --git-dir &>/dev/null 2>&1; then
+
+    local commit branch
+    commit="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)" || commit="unknown"
+    branch="$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" || branch="unknown"
+    printf "  ${BOLD}%-18s${RESET} %s\n" "Commit:" "$commit ($branch)"
+
+    # Tagged releases — no network call, shows locally known tags
+    local tags
+    tags="$(git -C "$SCRIPT_DIR" tag --sort=-version:refname 2>/dev/null)" || tags=""
+
+    if [[ -n "$tags" ]]; then
+      echo
+      section "Available releases"
+      while IFS= read -r tag; do
+        if [[ "$tag" == "v$VERSION" || "$tag" == "$VERSION" ]]; then
+          printf "  ${GREEN}%s${RESET}  ${DIM}← installed${RESET}\n" "$tag"
+        else
+          printf "  %s\n" "$tag"
+        fi
+      done <<< "$tags"
+    fi
+
+    # Nudge if origin/main has commits we haven't pulled (no fetch — local only)
+    local behind
+    behind="$(git -C "$SCRIPT_DIR" rev-list "HEAD..origin/main" --count 2>/dev/null)" || behind=0
+    if [[ "$behind" -gt 0 ]]; then
+      echo
+      warn "$behind commit(s) available upstream — run: lol upgrade"
+    fi
+  fi
+
+  echo
+}
+
 # ── cmd: completion ───────────────────────────────────────────────────────
 cmd_completion() {
   local shell="${1:-}"
@@ -1000,6 +1044,7 @@ main() {
     list)     cmd_list ;;
     status)   cmd_status ;;
     upgrade)  cmd_upgrade ;;
+    version)  cmd_version ;;
     help)     usage ;;
     # omc passthrough
     get|describe|logs|extract|adm|projects|top)

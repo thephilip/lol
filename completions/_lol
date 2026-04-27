@@ -68,7 +68,7 @@ _lol() {
             '--no-log[do not record this run to the context ledger]' \
             '*: :_default'
           ;;
-        cluster|list|status|upgrade|reset) ;;
+        cluster|list|status|upgrade|reset|version) ;;
       esac
       ;;
   esac
@@ -86,6 +86,7 @@ _lol_commands() {
     'status:show active session and context info'
     'upgrade:pull the latest version from origin/main'
     'reset:remove all lol session data and return to factory state'
+    'version:show version, commit, and available releases'
     'alerts:fetch live alerts from OCM'
     'service-log:fetch service log entries from OCM'
     'limited-support:check for limited support reasons via OCM'

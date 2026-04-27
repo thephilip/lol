@@ -222,6 +222,9 @@ lol list
 
 # Wipe all lol session data and return to factory state
 lol reset
+
+# Show version, commit, and available tagged releases
+lol version
 ```
 
 ---
