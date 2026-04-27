@@ -730,22 +730,31 @@ _cluster_display_ocm() {
   local name external_id ocm_id version state product
   local platform region multi_az api_url console_url
   local master_nodes infra_nodes compute_nodes created_at
+  local ccs hcp private_link sts mgmt_cluster hcp_namespace
 
-  name="$(         echo "$json" | jq -r '.name                          // "unknown"')"
-  external_id="$(  echo "$json" | jq -r '.external_id                   // "unknown"')"
-  ocm_id="$(       echo "$json" | jq -r '.id                            // "unknown"')"
-  version="$(      echo "$json" | jq -r '.openshift_version             // "unknown"')"
-  state="$(        echo "$json" | jq -r '.status.state                  // "unknown"')"
-  product="$(      echo "$json" | jq -r '.product.id                    // "unknown"')"
-  platform="$(     echo "$json" | jq -r '.cloud_provider.id             // "unknown"' | tr '[:lower:]' '[:upper:]')"
-  region="$(       echo "$json" | jq -r '.region.id                     // "unknown"')"
-  multi_az="$(     echo "$json" | jq -r '.multi_az                      // false')"
-  api_url="$(      echo "$json" | jq -r '.api.url                       // "unknown"')"
-  console_url="$(  echo "$json" | jq -r '.console.url                   // "unknown"')"
-  master_nodes="$( echo "$json" | jq -r '.nodes.master                  // "unknown"')"
-  infra_nodes="$(  echo "$json" | jq -r '.nodes.infra                   // "unknown"')"
-  compute_nodes="$(echo "$json" | jq -r '.nodes.compute                 // "unknown"')"
-  created_at="$(   echo "$json" | jq -r '.creation_timestamp[0:19]      // "unknown"')"
+  name="$(          echo "$json" | jq -r '.name                         // "unknown"')"
+  external_id="$(   echo "$json" | jq -r '.external_id                  // "unknown"')"
+  ocm_id="$(        echo "$json" | jq -r '.id                           // "unknown"')"
+  version="$(       echo "$json" | jq -r '.openshift_version            // "unknown"')"
+  state="$(         echo "$json" | jq -r '.status.state                 // "unknown"')"
+  product="$(       echo "$json" | jq -r '.product.id                   // "unknown"')"
+  platform="$(      echo "$json" | jq -r '.cloud_provider.id            // "unknown"' | tr '[:lower:]' '[:upper:]')"
+  region="$(        echo "$json" | jq -r '.region.id                    // "unknown"')"
+  multi_az="$(      echo "$json" | jq -r '.multi_az                     // false')"
+  api_url="$(       echo "$json" | jq -r '.api.url                      // "unknown"')"
+  console_url="$(   echo "$json" | jq -r '.console.url                  // "unknown"')"
+  master_nodes="$(  echo "$json" | jq -r '.nodes.master                 // "unknown"')"
+  infra_nodes="$(   echo "$json" | jq -r '.nodes.infra                  // "unknown"')"
+  compute_nodes="$( echo "$json" | jq -r '.nodes.compute                // "unknown"')"
+  created_at="$(    echo "$json" | jq -r '.creation_timestamp[0:19]     // "unknown"')"
+  ccs="$(           echo "$json" | jq -r '.ccs.enabled                  // false')"
+  hcp="$(           echo "$json" | jq -r '.hypershift.enabled           // false')"
+  private_link="$(  echo "$json" | jq -r '.aws.private_link             // false')"
+  sts="$(           echo "$json" | jq -r '.aws.sts.enabled              // false')"
+  mgmt_cluster="$(  echo "$json" | jq -r '.hypershift.management_cluster // empty')"
+  hcp_namespace="$( echo "$json" | jq -r '.hypershift.hcp_namespace     // empty')"
+
+  _bool() { [[ "$1" == "true" ]] && echo "yes" || echo "no"; }
 
   local state_str
   case "$state" in
@@ -756,26 +765,38 @@ _cluster_display_ocm() {
   esac
 
   section "Cluster: $name"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Name:"         "$name"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "External ID:"  "$external_id"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "OCM ID:"       "$ocm_id"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Name:"          "$name"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "External ID:"   "$external_id"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "OCM ID:"        "$ocm_id"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Version:"      "$version"
-  printf "  ${BOLD}%-20s${RESET} $(echo -e "${state_str}")\n" "State:"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Product:"      "$(echo "$product" | tr '[:lower:]' '[:upper:]')"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Version:"       "$version"
+  printf "  ${BOLD}%-22s${RESET} $(echo -e "${state_str}")\n" "State:"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Product:"       "$(echo "$product" | tr '[:lower:]' '[:upper:]')"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Platform:"     "$platform"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Region:"       "$region"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Multi-AZ:"     "$multi_az"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Platform:"      "$platform"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Region:"        "$region"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Multi-AZ:"      "$multi_az"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "API URL:"      "$api_url"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Console:"      "$console_url"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "API URL:"       "$api_url"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Console:"       "$console_url"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Master nodes:"  "$master_nodes"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Infra nodes:"   "$infra_nodes"
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Compute nodes:" "$compute_nodes"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Master nodes:"  "$master_nodes"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Infra nodes:"   "$infra_nodes"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Compute nodes:" "$compute_nodes"
   echo
-  printf "  ${BOLD}%-20s${RESET} %s\n" "Created:"      "$created_at"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "CCS:"           "$(_bool "$ccs")"
+  printf "  ${BOLD}%-22s${RESET} %s\n" "HCP:"           "$(_bool "$hcp")"
+  [[ "$platform" == "AWS" ]] && {
+    printf "  ${BOLD}%-22s${RESET} %s\n" "PrivateLink:"  "$(_bool "$private_link")"
+    printf "  ${BOLD}%-22s${RESET} %s\n" "STS:"          "$(_bool "$sts")"
+  }
+  if [[ "$hcp" == "true" ]]; then
+    echo
+    [[ -n "$mgmt_cluster" ]]  && printf "  ${BOLD}%-22s${RESET} %s\n" "Management cluster:" "$mgmt_cluster"
+    [[ -n "$hcp_namespace" ]] && printf "  ${BOLD}%-22s${RESET} %s\n" "HCP namespace:"      "$hcp_namespace"
+  fi
+  echo
+  printf "  ${BOLD}%-22s${RESET} %s\n" "Created:"       "$created_at"
   echo
 }
 
