@@ -96,10 +96,22 @@ disk latency. Consider moving the etcd data dir to faster storage (NVMe preferre
 lol get pods -n openshift-etcd
 lol describe node worker-1
 lol logs -n openshift-etcd etcd-0
-lol alerts          # shorthand for: omc get alerts -A
 lol top nodes
 lol projects
 ```
+
+### OCM commands
+
+The following commands query live data from OCM using the cluster ID embedded in the active must-gather. They require `ocm` to be installed and authenticated — see [OCM integration](#ocm-integration).
+
+```bash
+lol alerts                  # live firing alerts
+lol service-log             # recent service log entries (newest first)
+lol service-log --size 50   # fetch more entries (default: 20)
+lol limited-support         # check for limited support reasons
+```
+
+All OCM commands are logged to `commands.log` when a named context is active, with PII scrubbed before writing.
 
 ### ready-up
 
@@ -137,6 +149,7 @@ This removes the symlink and optionally the install directory and context data.
 | Tool | Required | Purpose |
 |------|----------|---------|
 | [`omc`](https://github.com/gmeghnag/omc) | Yes | Must-gather parsing (all check and passthrough commands) |
+| [`ocm`](https://github.com/openshift-online/ocm-cli) | For `lol alerts` | Live cluster data via the OCM API |
 | `bash` ≥ 4.0 | Yes | Associative arrays, `[[ ]]`, etc. |
 | `jq` | For some checks | JSON parsing |
 | `gum` or `fzf` | No | Optional — richer TUI prompts |
@@ -180,6 +193,9 @@ lol context resume 04425034-CoolBug
 
 # List available checks
 lol list
+
+# Wipe all lol session data and return to factory state
+lol reset
 ```
 
 ---
@@ -212,6 +228,54 @@ LOL_CLANKERS_API=http://localhost:11434
 ```
 
 lol infers the relevant namespace(s) from keywords in your query (`marketplace`, `etcd`, `ingress`, etc.) and gathers targeted pod status, warning events, and logs from problem pods. Broad cluster-level data (cluster operators, nodes, alerts) is used when no specific component is inferred. Context is capped to keep the prompt within small model limits.
+
+## OCM integration
+
+Some commands query live cluster data via [`ocm`](https://github.com/openshift-online/ocm-cli) — the OpenShift Cluster Manager CLI. These commands require `ocm` to be installed and authenticated with a Red Hat account that has access to the cluster.
+
+| Command | Requires `ocm` | What it fetches |
+|---------|:--------------:|-----------------|
+| `lol alerts` | Yes | Live firing alerts from OCM |
+| `lol service-log` | Yes | Recent service log entries posted by Red Hat for the cluster |
+| `lol limited-support` | Yes | Whether the cluster has limited support reasons on record |
+| Everything else | No | Fully offline — works against any must-gather |
+
+### Setup
+
+```bash
+# 1. Install ocm
+#    Full instructions: https://github.com/openshift-online/ocm-cli
+#    Quickstart (requires Go):
+go install github.com/openshift-online/ocm-cli/cmd/ocm@latest
+
+# 2. Log in with your Red Hat SSO credentials
+ocm login --use-auth-code
+
+# 3. Verify
+ocm whoami
+```
+
+> See the [ocm-cli README](https://github.com/openshift-online/ocm-cli) for alternative install methods (pre-built binaries, Homebrew, etc.) and full login options.
+
+### Security notes
+
+- `ocm` stores your session token in `~/.config/ocm/ocm.json`. Never share this file.
+- `lol` only makes read-only `GET` requests to the OCM API — it will never modify cluster state.
+- When a named context is active, OCM output written to `commands.log` is scrubbed of UUIDs, IP addresses, and emails before being saved, so `lol ready-up` handoffs don't inadvertently include sensitive identifiers.
+- If your `ocm` session is expired, re-run `ocm login` before using OCM-backed commands.
+
+### Data that persists on disk
+
+If you remove `ocm` or `lol`, or rotate your Red Hat credentials, be aware of what lingers:
+
+| Location | What's there | How to clear |
+|----------|-------------|--------------|
+| `~/.config/ocm/` | `ocm` session token and config | `rm -rf ~/.config/ocm/` |
+| `~/.config/lol/` | Context ledgers, `commands.log` files, check run outputs | `rm -rf ~/.config/lol/` or run `bash install.sh --uninstall` |
+
+Neither location is touched by uninstalling `lol` alone — you need to clear them manually if you want a clean slate.
+
+---
 
 ## Contributing
 
@@ -289,4 +353,4 @@ shellcheck lol lib/common.sh checks/*.sh
 
 ## License
 
-MIT
+Apache 2.0

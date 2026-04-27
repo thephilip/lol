@@ -38,6 +38,11 @@ Commands:
   status                  Show active session / context info
   upgrade                 Pull the latest version from origin/main
 
+ocm commands (require ocm login; logged to ledger when in a named context):
+  alerts                  Live alerts for the active cluster
+  service-log [--size N]  Recent service log entries (default: 20)
+  limited-support         Check whether the cluster has limited support reasons
+
 omc passthrough (context-aware; logged to ledger when in a named context):
   get <resource> [flags]  e.g. lol get pods -n openshift-etcd
   describe <resource>     e.g. lol describe node worker-1
@@ -46,7 +51,9 @@ omc passthrough (context-aware; logged to ledger when in a named context):
   projects
   extract
   adm
-  alerts                  Shorthand for: omc get alerts -A
+
+Other:
+  reset                   Remove all lol session data and return to factory state
 
 Global flags:
   --context, -c <name>    Named context to create or use
@@ -722,8 +729,207 @@ cmd_omc_passthrough() {
   return $rc
 }
 
-# Convenience: lol alerts → omc get alerts -A
-cmd_alerts() { cmd_omc_passthrough get alerts -A "$@"; }
+# cmd: alerts — fetch live alerts via OCM for the active must-gather's cluster
+cmd_alerts() {
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol alerts"
+    exit 2
+  fi
+
+  local mg_path
+  mg_path="$(resolve_mg_path)" || exit 1
+  omc_use "$mg_path" || exit 2
+
+  local cluster_id
+  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
+  if [[ -z "$cluster_id" ]]; then
+    err "Could not determine cluster ID from must-gather"
+    exit 1
+  fi
+
+  local no_log=false
+  local -a extra_args=()
+  for arg in "$@"; do
+    [[ "$arg" == "--no-log" ]] && no_log=true || extra_args+=("$arg")
+  done
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+  local endpoint="/api/clusters_mgmt/v1/clusters/${cluster_id}/alerts"
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    local tmp_out; tmp_out="$(mktemp)"
+
+    ocm get "$endpoint" "${extra_args[@]}" >"$tmp_out" 2>&1 || rc=$?
+    cat "$tmp_out"
+
+    {
+      printf '[%s] $ ocm get alerts (cluster: %s)\n' "$ts" "$cluster_id"
+      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '\n'
+    } >> "$cmd_log"
+
+    rm -f "$tmp_out"
+  else
+    ocm get "$endpoint" "${extra_args[@]}" || rc=$?
+  fi
+
+  return $rc
+}
+
+# ── cmd: service-log ─────────────────────────────────────────────────────
+cmd_service_log() {
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol service-log"
+    exit 2
+  fi
+
+  local mg_path
+  mg_path="$(resolve_mg_path)" || exit 1
+  omc_use "$mg_path" || exit 2
+
+  local cluster_id
+  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
+  if [[ -z "$cluster_id" ]]; then
+    err "Could not determine cluster ID from must-gather"
+    exit 1
+  fi
+
+  local no_log=false size=20
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-log) no_log=true; shift ;;
+      --size)   size="$2"; shift 2 ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+  local tmp_out; tmp_out="$(mktemp)"
+
+  section "Service Log: $cluster_id"
+
+  ocm get /api/service_logs/v1/cluster_logs \
+    --parameter "search=cluster_uuid='${cluster_id}'" \
+    --parameter "orderBy=timestamp desc" \
+    --parameter "size=${size}" >"$tmp_out" 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v jq &>/dev/null; then
+    local total; total="$(jq -r '.total // 0' "$tmp_out")"
+    info "Showing ${size} of ${total} total entries (newest first)"
+    echo
+    jq -r '.items[]? |
+      "[\(.timestamp[0:19])] [\(.severity)] \(.service_name)\n  \(.summary)\n"' "$tmp_out"
+  else
+    cat "$tmp_out"
+  fi
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    {
+      printf '[%s] $ lol service-log (cluster: %s, size: %s)\n' "$ts" "$cluster_id" "$size"
+      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '\n'
+    } >> "$cmd_log"
+  fi
+
+  rm -f "$tmp_out"
+  return $rc
+}
+
+# ── cmd: limited-support ──────────────────────────────────────────────────
+cmd_limited_support() {
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol limited-support"
+    exit 2
+  fi
+
+  local mg_path
+  mg_path="$(resolve_mg_path)" || exit 1
+  omc_use "$mg_path" || exit 2
+
+  local cluster_id
+  cluster_id="$(omc get clusterversion version -o jsonpath='{.spec.clusterID}' 2>/dev/null)" || cluster_id=""
+  if [[ -z "$cluster_id" ]]; then
+    err "Could not determine cluster ID from must-gather"
+    exit 1
+  fi
+
+  local no_log=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-log) no_log=true; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  # OCM uses an internal cluster ID distinct from the external UUID in ClusterVersion.
+  # Resolve it via a search on external_id before querying the limited support endpoint.
+  local lookup_json ocm_id
+  lookup_json="$(ocm get /api/clusters_mgmt/v1/clusters \
+    --parameter "search=external_id='${cluster_id}'" \
+    --parameter size=1 2>/dev/null)" || { err "Failed to look up cluster in OCM"; exit 1; }
+  ocm_id="$(echo "$lookup_json" | jq -r '.items[0].id // empty')"
+
+  if [[ -z "$ocm_id" ]]; then
+    err "Cluster not found in OCM (external_id: $cluster_id)"
+    info "Ensure you are logged in to the correct OCM environment: ocm whoami"
+    exit 1
+  fi
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+  local tmp_out; tmp_out="$(mktemp)"
+
+  section "Limited Support: $cluster_id"
+
+  ocm get "/api/clusters_mgmt/v1/clusters/${ocm_id}/limited_support_reasons" \
+    >"$tmp_out" 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v jq &>/dev/null; then
+    local total; total="$(jq -r '.total // 0' "$tmp_out")"
+    if [[ "$total" -eq 0 ]]; then
+      ok "No limited support reasons — cluster is in full support"
+    else
+      warn "$total limited support reason(s) on record"
+      echo
+      jq -r '.items[]? |
+        "[\(.detection_type // "manual")] \(.summary)\n  \(.details // "(no details)")\n"' "$tmp_out"
+    fi
+  else
+    cat "$tmp_out"
+  fi
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    {
+      printf '[%s] $ lol limited-support (cluster: %s)\n' "$ts" "$cluster_id"
+      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '\n'
+    } >> "$cmd_log"
+  fi
+
+  rm -f "$tmp_out"
+  return $rc
+}
+
+# ── cmd: reset ────────────────────────────────────────────────────────────
+cmd_reset() {
+  warn "This will permanently delete all lol session data:"
+  echo -e "  ${BOLD}${LOL_CONFIG_DIR}${RESET}"
+  echo -e "  (contexts, check runs, command logs, active session)"
+  echo
+  read -rp "  Are you sure? [y/N] " confirm
+  [[ "${confirm,,}" != "y" ]] && { info "Reset cancelled."; exit 0; }
+
+  rm -rf "$LOL_CONFIG_DIR"
+  ok "lol reset to factory state"
+}
 
 # ── Main ──────────────────────────────────────────────────────────────────
 main() {
@@ -770,7 +976,10 @@ main() {
     # omc passthrough
     get|describe|logs|extract|adm|projects|top)
               cmd_omc_passthrough "$cmd" "${cmd_args[@]}" ;;
-    alerts)   cmd_alerts "${cmd_args[@]}" ;;
+    alerts)          cmd_alerts         "${cmd_args[@]}" ;;
+    service-log)     cmd_service_log    "${cmd_args[@]}" ;;
+    limited-support) cmd_limited_support "${cmd_args[@]}" ;;
+    reset)           cmd_reset          "${cmd_args[@]}" ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
   esac
 }
