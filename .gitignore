@@ -10,3 +10,6 @@
 # Local test must-gathers (don't accidentally commit huge directories)
 must-gather*/
 mg-*/
+
+# Claude Code local settings
+.claude/settings.local.json
