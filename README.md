@@ -21,6 +21,8 @@ lol/
 │   ├── etcd.sh
 │   ├── nodes.sh
 │   └── pdbs.sh
+├── completions/
+│   └── _lol             # zsh completion script
 └── signatures/          # known-issue fingerprint files
     ├── etcd-high-latency.sig
     ├── etcd-member-unhealthy.sig
@@ -133,6 +135,30 @@ The install script will:
 3. Warn if `~/.local/bin` is not in your `$PATH`
 
 Because the install directory is a git clone, `lol upgrade` works out of the box.
+
+### Shell completions
+
+Tab completion is available for zsh. The install script will offer to set it up automatically. To install manually:
+
+```bash
+# Create a completions directory if you don't have one
+mkdir -p ~/.zfunc
+
+# Write the completion script
+lol completion zsh > ~/.zfunc/_lol
+
+# Ensure ~/.zfunc is in your fpath — add this to ~/.zshrc before compinit:
+fpath=(~/.zfunc $fpath)
+```
+
+Or source it inline (no file needed, but slower shell startup):
+
+```bash
+# In ~/.zshrc:
+source <(lol completion zsh)
+```
+
+The completion script dynamically discovers check names (from your install's `checks/` directory) and context names (from `~/.config/lol/contexts/`) at tab-time.
 
 **Uninstall:**
 

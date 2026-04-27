@@ -1,0 +1,134 @@
+#compdef lol
+
+# Zsh completion for lol — https://github.com/thephilip/lol
+# Install: lol completion zsh > ~/.zfunc/_lol
+# Then ensure ~/.zfunc is in your fpath (before compinit):
+#   fpath=(~/.zfunc $fpath)
+
+_lol() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[show help and exit]' \
+    '(-v --version)'{-v,--version}'[show version and exit]' \
+    '(-c --context)'{-c,--context}'[named context to create or use]:context name:_lol_contexts' \
+    '1: :_lol_commands' \
+    '*:: :->args'
+
+  case $state in
+    args)
+      case $line[1] in
+        use)
+          _arguments \
+            '1:must-gather path:_files -/'
+          ;;
+        check)
+          _arguments \
+            '--no-log[do not record this run to the context ledger]' \
+            '--with-clankers[run local AI analysis against the must-gather]:query' \
+            '--clankers-model[model to use for AI analysis]:model name' \
+            '*:check name:_lol_check_names'
+          ;;
+        context)
+          local -a ctx_subcmds
+          ctx_subcmds=(
+            'list:list all saved contexts'
+            'resume:resume a saved context'
+            'show:show details of a context'
+          )
+          _arguments \
+            '1: :->ctx_sub' \
+            '*:: :->ctx_args'
+          case $state in
+            ctx_sub)  _describe 'subcommand' ctx_subcmds ;;
+            ctx_args)
+              case $line[1] in
+                resume|show) _arguments '1:context name:_lol_contexts' ;;
+              esac
+              ;;
+          esac
+          ;;
+        ready-up)
+          _arguments \
+            '--no-redact[skip PII scrubbing (for internal/self-hosted AI only)]' \
+            '(-o --output)'{-o,--output}'[write to file instead of stdout]:output file:_files'
+          ;;
+        service-log)
+          _arguments \
+            '--no-log[do not record this run to the context ledger]' \
+            '--size[number of entries to fetch (default\: 20)]:count'
+          ;;
+        alerts|limited-support)
+          _arguments \
+            '--no-log[do not record this run to the context ledger]'
+          ;;
+        get|describe|logs|extract|adm|projects|top)
+          _arguments \
+            '--no-log[do not record this run to the context ledger]' \
+            '*: :_default'
+          ;;
+        cluster|list|status|upgrade|reset) ;;
+      esac
+      ;;
+  esac
+}
+
+_lol_commands() {
+  local -a commands
+  commands=(
+    'use:set the active must-gather'
+    'check:run checks against the active must-gather'
+    'cluster:show cluster summary (version, platform, network)'
+    'context:manage named contexts (list / resume / show)'
+    'ready-up:generate an AI-ready handoff document'
+    'list:list available checks'
+    'status:show active session and context info'
+    'upgrade:pull the latest version from origin/main'
+    'reset:remove all lol session data and return to factory state'
+    'alerts:fetch live alerts from OCM'
+    'service-log:fetch service log entries from OCM'
+    'limited-support:check for limited support reasons via OCM'
+    'get:omc passthrough — get resources'
+    'describe:omc passthrough — describe a resource'
+    'logs:omc passthrough — view pod logs'
+    'top:omc passthrough — show node/pod resource usage'
+    'projects:omc passthrough — list projects'
+    'extract:omc passthrough — extract must-gather data'
+    'adm:omc passthrough — cluster administration'
+  )
+  _describe 'command' commands
+}
+
+# Dynamically complete saved context names from ~/.config/lol/contexts/
+_lol_contexts() {
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/lol/contexts"
+  local -a names
+  if [[ -d "$config_dir" ]]; then
+    local dir
+    for dir in "$config_dir"/*/; do
+      [[ -f "${dir}meta.env" ]] && names+=("${dir%/}")
+    done
+    names=("${names[@]##*/}")
+  fi
+  _describe 'context name' names
+}
+
+# Dynamically complete check names from the lol install's checks/ directory
+_lol_check_names() {
+  local lol_bin real_lol checks_dir
+  lol_bin="$(command -v lol 2>/dev/null)"
+  if [[ -n "$lol_bin" ]]; then
+    real_lol="$(readlink -f "$lol_bin" 2>/dev/null || echo "$lol_bin")"
+    checks_dir="$(dirname "$real_lol")/checks"
+  fi
+  local -a names
+  if [[ -d "$checks_dir" ]]; then
+    names=("${checks_dir}"/*.sh)
+    names=("${names[@]##*/}")
+    names=("${names[@]%.sh}")
+    _describe 'check name' names
+  fi
+}
+
+_lol "$@"

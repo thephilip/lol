@@ -61,6 +61,23 @@ uninstall() {
     fi
   fi
 
+  # Remove completion file if found
+  local candidate
+  for candidate in \
+    "${ZDOTDIR:-$HOME}/.zfunc/_lol" \
+    "$HOME/.local/share/zsh/site-functions/_lol" \
+    "$HOME/.zsh/completions/_lol"; do
+    if [[ -f "$candidate" ]]; then
+      read -rp "Remove zsh completion at $candidate? [y/N] " confirm
+      if [[ "${confirm,,}" == "y" ]]; then
+        rm -f "$candidate"
+        ok "Removed: $candidate"
+      else
+        info "Kept: $candidate"
+      fi
+    fi
+  done
+
   ok "Done."
 }
 
@@ -120,6 +137,44 @@ install() {
     printf "  ${B}bash / zsh:${Z}  export PATH=\"\$HOME/.local/bin:\$PATH\"\n"
     printf "  ${B}fish:${Z}        fish_add_path \$HOME/.local/bin\n"
     echo
+  fi
+
+  # Zsh completions (optional)
+  step "Zsh completions"
+  local comp_src="$INSTALL_DIR/completions/_lol"
+  if [[ -f "$comp_src" ]]; then
+    # Try to find a user completions dir already in fpath
+    local comp_dest=""
+    local candidate
+    for candidate in \
+      "${ZDOTDIR:-$HOME}/.zfunc" \
+      "$HOME/.local/share/zsh/site-functions" \
+      "$HOME/.zsh/completions"; do
+      if [[ -d "$candidate" ]]; then
+        comp_dest="$candidate"
+        break
+      fi
+    done
+
+    if [[ -n "$comp_dest" ]]; then
+      read -rp "  Install zsh completion to $comp_dest/_lol? [Y/n] " confirm
+      if [[ "${confirm,,}" != "n" ]]; then
+        cp "$comp_src" "$comp_dest/_lol"
+        ok "Installed: $comp_dest/_lol"
+      else
+        info "Skipped. Install manually: lol completion zsh > ~/.zfunc/_lol"
+      fi
+    else
+      info "No zsh completions directory detected."
+      echo
+      echo "  To enable tab completion, add this to your ~/.zshrc:"
+      echo
+      printf "  ${B}mkdir -p ~/.zfunc${Z}\n"
+      printf "  ${B}lol completion zsh > ~/.zfunc/_lol${Z}\n"
+      printf "  ${B}# ensure this is before compinit in your .zshrc:${Z}\n"
+      printf "  ${B}fpath=(~/.zfunc \$fpath)${Z}\n"
+      echo
+    fi
   fi
 
   step "Done"

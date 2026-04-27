@@ -54,6 +54,7 @@ omc passthrough (context-aware; logged to ledger when in a named context):
 
 Other:
   reset                   Remove all lol session data and return to factory state
+  completion <shell>      Output shell completion script (supported: zsh)
 
 Global flags:
   --context, -c <name>    Named context to create or use
@@ -918,6 +919,33 @@ cmd_limited_support() {
   return $rc
 }
 
+# ── cmd: completion ───────────────────────────────────────────────────────
+cmd_completion() {
+  local shell="${1:-}"
+  case "$shell" in
+    zsh)
+      local comp="$SCRIPT_DIR/completions/_lol"
+      if [[ ! -f "$comp" ]]; then
+        err "Completion file not found: $comp"
+        exit 1
+      fi
+      cat "$comp"
+      ;;
+    ""|--help|-h)
+      echo "Usage: lol completion <shell>"
+      echo "Supported shells: zsh"
+      echo
+      echo "Examples:"
+      echo "  lol completion zsh > ~/.zfunc/_lol"
+      echo "  source <(lol completion zsh)"
+      ;;
+    *)
+      err "Unsupported shell: '$shell' (supported: zsh)"
+      exit 1
+      ;;
+  esac
+}
+
 # ── cmd: reset ────────────────────────────────────────────────────────────
 cmd_reset() {
   warn "This will permanently delete all lol session data:"
@@ -980,6 +1008,7 @@ main() {
     service-log)     cmd_service_log    "${cmd_args[@]}" ;;
     limited-support) cmd_limited_support "${cmd_args[@]}" ;;
     reset)           cmd_reset          "${cmd_args[@]}" ;;
+    completion)      cmd_completion     "${cmd_args[@]}" ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
   esac
 }
