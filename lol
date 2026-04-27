@@ -1273,12 +1273,17 @@ cmd_version() {
       done <<< "$tags"
     fi
 
-    # Nudge if origin/main has commits we haven't pulled (no fetch — local only)
+    # Check for upstream updates
+    echo
+    info "Checking for updates..."
+    git -C "$SCRIPT_DIR" fetch origin main --quiet 2>/dev/null || true
+
     local behind
     behind="$(git -C "$SCRIPT_DIR" rev-list "HEAD..origin/main" --count 2>/dev/null)" || behind=0
     if [[ "$behind" -gt 0 ]]; then
-      echo
       warn "$behind commit(s) available upstream — run: lol upgrade"
+    else
+      ok "Up to date"
     fi
   fi
 
