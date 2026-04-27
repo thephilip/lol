@@ -36,6 +36,7 @@ _lol() {
             'list:list all saved contexts'
             'resume:resume a saved context'
             'show:show details of a context'
+            'rm:delete a saved context'
           )
           _arguments \
             '1: :->ctx_sub' \
@@ -44,7 +45,7 @@ _lol() {
             ctx_sub)  _describe 'subcommand' ctx_subcmds ;;
             ctx_args)
               case $line[1] in
-                resume|show) _arguments '1:context name:_lol_contexts' ;;
+                resume|show|rm) _arguments '1:context name:_lol_contexts' ;;
               esac
               ;;
           esac

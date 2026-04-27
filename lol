@@ -32,7 +32,7 @@ Commands:
   use <path>              Set the active must-gather
   check [name,...]        Run checks (no args = all; comma-separated names for specific)
   cluster [-C <id>]       Show cluster summary; -C/--cluster sets cluster via OCM
-  context <sub>           Manage named contexts (list / resume / show)
+  context <sub>           Manage named contexts (list / resume / show / rm)
   ready-up                Generate an AI-ready handoff from the active context
   list                    List available checks
   status                  Show active session / context info
@@ -370,12 +370,37 @@ cmd_context_show() {
   fi
 }
 
+cmd_context_rm() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && { err "Usage: lol context rm <name>"; exit 1; }
+  ctx_exists "$name" || { err "Context not found: $name"; info "Run: lol context list"; exit 1; }
+
+  local run_count=0 mg_count=0
+  [[ -d "$(ctx_runs "$name")" ]] && run_count="$(find "$(ctx_runs "$name")" -maxdepth 1 -name '*.txt' | wc -l | tr -d ' ')"
+  [[ -f "$(ctx_hist "$name")" ]] && mg_count="$(wc -l < "$(ctx_hist "$name")" | tr -d ' ')"
+
+  warn "This will permanently delete context '${name}' (${run_count} run(s), ${mg_count} must-gather(s))."
+  read -rp "  Are you sure? [y/N] " confirm
+  [[ "${confirm,,}" != "y" ]] && { info "Cancelled."; exit 0; }
+
+  local cur_ctx; cur_ctx="$(active_ctx)"
+  if [[ "$cur_ctx" == "$name" ]]; then
+    clear_active_ctx
+    rm -f "$LOL_CONTEXT_FILE"
+    info "Active context cleared."
+  fi
+
+  rm -rf "$(ctx_dir "$name")"
+  ok "Deleted context: $name"
+}
+
 cmd_context() {
   local subcmd="${1:-list}"; shift || true
   case "$subcmd" in
     list)   cmd_context_list ;;
     resume) cmd_context_resume "$@" ;;
     show)   cmd_context_show "$@" ;;
+    rm)     cmd_context_rm "$@" ;;
     *) err "Unknown context subcommand: '$subcmd'"; usage; exit 1 ;;
   esac
 }
