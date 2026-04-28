@@ -34,6 +34,7 @@ Commands:
   cluster [-C <id>]       Show cluster summary; -C/--cluster sets cluster via OCM
   context <sub>           Manage named contexts (new / list / resume / show / rm)
   ready-up                Generate an AI-ready handoff from the active context
+  config                  Interactive configuration menu (AI model, endpoint)
   list                    List available checks
   status                  Show active session / context info
   upgrade                 Pull the latest version from origin/main
@@ -319,7 +320,12 @@ cmd_context_list() {
 
 cmd_context_resume() {
   local name="${1:-}"
-  [[ -z "$name" ]] && { err "Usage: lol context resume <name>"; exit 1; }
+  if [[ -z "$name" ]]; then
+    if [[ -d "$LOL_CONTEXTS_DIR" ]]; then
+      name="$(ls "$LOL_CONTEXTS_DIR" 2>/dev/null | _tui_filter "Select a context")"
+    fi
+    [[ -z "$name" ]] && { err "Usage: lol context resume <name>"; exit 1; }
+  fi
   ctx_exists "$name" || { err "Context not found: $name"; info "Run: lol context list"; exit 1; }
 
   local mg; mg="$(ctx_get "$name" "CURRENT_MG")"
@@ -374,14 +380,13 @@ cmd_context_show() {
 cmd_context_new() {
   local name="${1:-}"
   if [[ -z "$name" ]]; then
-    read -rp "  Context name: " name
+    name="$(_tui_input "Context name" "")"
     [[ -z "$name" ]] && { err "Context name cannot be empty."; exit 1; }
   fi
 
   if ctx_exists "$name"; then
     warn "Context '$name' already exists."
-    read -rp "  Resume it instead? [Y/n] " resp
-    [[ "${resp,,}" == "n" ]] && { info "Cancelled."; exit 0; }
+    _tui_confirm "Resume it instead?" || { info "Cancelled."; exit 0; }
     cmd_context_resume "$name"
     return
   fi
@@ -405,9 +410,8 @@ cmd_context_rm() {
   [[ -d "$(ctx_runs "$name")" ]] && run_count="$(find "$(ctx_runs "$name")" -maxdepth 1 -name '*.txt' | wc -l | tr -d ' ')"
   [[ -f "$(ctx_hist "$name")" ]] && mg_count="$(wc -l < "$(ctx_hist "$name")" | tr -d ' ')"
 
-  warn "This will permanently delete context '${name}' (${run_count} run(s), ${mg_count} must-gather(s))."
-  read -rp "  Are you sure? [y/N] " confirm
-  [[ "${confirm,,}" != "y" ]] && { info "Cancelled."; exit 0; }
+  _tui_confirm "Permanently delete context '${name}' (${run_count} run(s), ${mg_count} must-gather(s))?" \
+    || { info "Cancelled."; exit 0; }
 
   local cur_ctx; cur_ctx="$(active_ctx)"
   if [[ "$cur_ctx" == "$name" ]]; then
@@ -895,8 +899,7 @@ _cluster_set() {
   if [[ -n "$matching_ctx" ]]; then
     echo
     info "Context '${matching_ctx}' already tracks this cluster."
-    read -rp "  Resume '${matching_ctx}'? [Y/n] " resp
-    if [[ "${resp,,}" != "n" ]]; then
+    if _tui_confirm "Resume '${matching_ctx}'?"; then
       local mg; mg="$(ctx_get "$matching_ctx" "CURRENT_MG")"
       set_active_ctx "$matching_ctx"
       mkdir -p "$LOL_CONFIG_DIR"
@@ -913,23 +916,22 @@ _cluster_set() {
   if [[ -n "$cur_ctx" && -z "$cur_cluster_id" ]]; then
     echo
     info "Active context '${cur_ctx}' has no cluster set."
-    echo "  [1] Associate this cluster with '${cur_ctx}'"
-    echo "  [2] Create a new context for ${cluster_name}"
-    echo "  [3] Show info without saving"
-    echo
-    read -rp "  Choice [1]: " choice
-    choice="${choice:-1}"
+    local choice
+    choice="$(_tui_choose "What would you like to do?" \
+      "Associate this cluster with '${cur_ctx}'" \
+      "Create a new context for ${cluster_name}" \
+      "Show info without saving")"
 
     case "$choice" in
-      3)
+      Show*)
         info "Showing cluster info — not saved to context"
         echo
         _cluster_display_ocm "$cluster_json"
         return
         ;;
-      2)
+      Create*)
         echo
-        read -rp "  Context name [${cluster_name}]: " ctx_input
+        local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
         ctx_input="${ctx_input:-$cluster_name}"
         local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
         ctx_set "$ctx_input" "NAME"       "$ctx_input"
@@ -959,7 +961,7 @@ _cluster_set() {
   # ── CASE 4: no active context — must create one ────────────────────────
   if [[ -z "$cur_ctx" ]]; then
     echo
-    read -rp "  Context name [${cluster_name}]: " ctx_input
+    local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
     ctx_input="${ctx_input:-$cluster_name}"
     local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
     ctx_set "$ctx_input" "NAME"       "$ctx_input"
@@ -978,21 +980,20 @@ _cluster_set() {
   echo
   warn "Context '${cur_ctx}' tracks a different cluster (${cur_cluster_id})."
   echo
-  echo "  [1] Create a new context for ${cluster_name}"
-  echo "  [2] Show info in current context (no changes saved)"
-  echo
-  read -rp "  Choice [1]: " choice
-  choice="${choice:-1}"
+  local choice
+  choice="$(_tui_choose "What would you like to do?" \
+    "Create a new context for ${cluster_name}" \
+    "Show info in current context (no changes saved)")"
 
   case "$choice" in
-    2)
+    Show*)
       info "Showing cluster info — not saved to context"
       echo
       _cluster_display_ocm "$cluster_json"
       ;;
     *)
       echo
-      read -rp "  Context name [${cluster_name}]: " ctx_input
+      local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
       ctx_input="${ctx_input:-$cluster_name}"
       local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
       ctx_set "$ctx_input" "NAME"       "$ctx_input"
@@ -1134,8 +1135,7 @@ cmd_upgrade() {
   # Warn if there are local modifications
   if ! git -C "$SCRIPT_DIR" diff --quiet || ! git -C "$SCRIPT_DIR" diff --cached --quiet; then
     warn "You have local modifications — upgrade may conflict."
-    read -rp "Continue anyway? [y/N] " confirm
-    [[ "${confirm,,}" == "y" ]] || { info "Upgrade cancelled."; exit 0; }
+    _tui_confirm "Continue with upgrade anyway?" || { info "Upgrade cancelled."; exit 0; }
   fi
 
   local before
@@ -1428,6 +1428,59 @@ cmd_version() {
   echo
 }
 
+# ── cmd: config ───────────────────────────────────────────────────────────
+cmd_config() {
+  local cfg="$LOL_CONFIG_DIR/config.env"
+  mkdir -p "$LOL_CONFIG_DIR"
+  [[ -f "$cfg" ]] && source "$cfg" 2>/dev/null
+
+  local model="${LOL_CLANKERS_MODEL:-gemma2:2b}"
+  local api="${LOL_CLANKERS_API:-http://localhost:11434}"
+  local changed=false
+
+  section "lol config"
+
+  while true; do
+    local choice
+    choice="$(_tui_choose "Select a setting to change:" \
+      "AI model      → ${model}" \
+      "AI endpoint   → ${api}" \
+      "View config file" \
+      "Save and exit" \
+      "Exit without saving")"
+
+    case "$choice" in
+      AI\ model*)
+        local new; new="$(_tui_input "AI model" "$model")"
+        [[ -n "$new" ]] && { model="$new"; changed=true; }
+        ;;
+      AI\ endpoint*)
+        local new; new="$(_tui_input "API endpoint" "$api")"
+        [[ -n "$new" ]] && { api="$new"; changed=true; }
+        ;;
+      View*)
+        echo
+        if [[ -f "$cfg" ]]; then
+          cat "$cfg"
+        else
+          info "No config file yet — defaults are active."
+        fi
+        echo
+        ;;
+      Save*)
+        printf 'LOL_CLANKERS_MODEL=%s\nLOL_CLANKERS_API=%s\n' \
+          "$model" "$api" > "$cfg"
+        ok "Saved: $cfg"
+        break
+        ;;
+      Exit*|"")
+        $changed && info "Changes discarded."
+        break
+        ;;
+    esac
+  done
+}
+
 # ── cmd: completion ───────────────────────────────────────────────────────
 cmd_completion() {
   local shell="${1:-}"
@@ -1461,8 +1514,7 @@ cmd_reset() {
   echo -e "  ${BOLD}${LOL_CONFIG_DIR}${RESET}"
   echo -e "  (contexts, check runs, command logs, active session)"
   echo
-  read -rp "  Are you sure? [y/N] " confirm
-  [[ "${confirm,,}" != "y" ]] && { info "Reset cancelled."; exit 0; }
+  _tui_confirm "Reset lol to factory state?" || { info "Reset cancelled."; exit 0; }
 
   rm -rf "$LOL_CONFIG_DIR"
   ok "lol reset to factory state"
@@ -1506,6 +1558,7 @@ main() {
     cluster)  cmd_cluster  "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
+    config)   cmd_config ;;
     list)     cmd_list ;;
     status)   cmd_status ;;
     upgrade)  cmd_upgrade ;;

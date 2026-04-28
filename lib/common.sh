@@ -111,6 +111,75 @@ scrub_pii() {
     | sed -E 's/(console-openshift-console\.apps\.|api\.)[a-zA-Z0-9._-]+/[REDACTED:cluster-url]/g'
 }
 
+# ── TUI helpers (gum with plain-shell fallback) ────────────────────────────
+
+# _tui_confirm <prompt>
+#   Returns 0 (yes) or 1 (no/cancel).
+_tui_confirm() {
+  local prompt="${1:-Are you sure?}"
+  if command -v gum &>/dev/null; then
+    gum confirm "$prompt"
+  else
+    local _r
+    read -rp "  ${prompt} [y/N] " _r
+    [[ "${_r,,}" == "y" ]]
+  fi
+}
+
+# _tui_input <prompt> [placeholder]
+#   Prints the entered value on stdout.
+_tui_input() {
+  local prompt="$1" placeholder="${2:-}"
+  if command -v gum &>/dev/null; then
+    gum input --placeholder "${placeholder}" --prompt "${prompt}: "
+  else
+    local _r
+    read -rp "  ${prompt}${placeholder:+ [${placeholder}]}: " _r
+    echo "${_r:-${placeholder}}"
+  fi
+}
+
+# _tui_choose <header> <option>...
+#   Prints the selected option on stdout.
+_tui_choose() {
+  local header="$1"; shift
+  if command -v gum &>/dev/null; then
+    gum choose --header "$header" "$@"
+  else
+    local _i=1
+    for _opt in "$@"; do
+      printf "  [%d] %s\n" "$_i" "$_opt"
+      ((_i++)) || true
+    done
+    local _r; read -rp "  Choice [1]: " _r
+    _r="${_r:-1}"
+    local _arr=("$@")
+    echo "${_arr[$(( _r - 1 ))]:-}"
+  fi
+}
+
+# _tui_filter [placeholder]
+#   Reads lines from stdin; prints the selected line on stdout.
+#   Falls back to fzf, then to a plain numbered list.
+_tui_filter() {
+  local placeholder="${1:-Type to filter...}"
+  if command -v gum &>/dev/null; then
+    gum filter --placeholder "$placeholder"
+  elif command -v fzf &>/dev/null; then
+    fzf --prompt "$placeholder "
+  else
+    local -a _items=()
+    while IFS= read -r _line; do _items+=("$_line"); done
+    local _i=1
+    for _item in "${_items[@]}"; do
+      printf "  [%d] %s\n" "$_i" "$_item"
+      ((_i++)) || true
+    done
+    local _r; read -rp "  Choice: " _r
+    echo "${_items[$(( _r - 1 ))]:-}"
+  fi
+}
+
 # ── Signature matching ─────────────────────────────────────────────────────
 # match_signatures <category_prefix> <text>
 #   Prints any matching known-issue signatures with remediation steps.

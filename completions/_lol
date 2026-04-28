@@ -97,6 +97,7 @@ _lol_commands() {
     'list:list available checks'
     'status:show active session and context info'
     'upgrade:pull the latest version from origin/main'
+    'config:interactive configuration menu (AI model, endpoint)'
     'reset:remove all lol session data and return to factory state'
     'version:show version, commit, and available releases'
     'alerts:fetch live alerts from OCM'
