@@ -90,9 +90,12 @@ REMEDIATION=Check disk I/O on control plane nodes. etcd is extremely sensitive t
 disk latency. Consider moving the etcd data dir to faster storage (NVMe preferred).
 ```
 
-### omc passthrough
+### omc / oc passthrough
 
-`lol` forwards a set of `omc` subcommands directly, automatically setting the `omc` context from lol's active must-gather. When a named context is active, the command and its output are appended to `commands.log`.
+`lol` forwards a set of subcommands to `omc` (must-gather) or `oc` (live cluster), depending on what's available:
+
+- **Must-gather set** → uses `omc` against the snapshot
+- **No must-gather** → falls back to `oc` against the live cluster automatically
 
 ```bash
 lol get pods -n openshift-etcd
@@ -100,7 +103,10 @@ lol describe node worker-1
 lol logs -n openshift-etcd etcd-0
 lol top nodes
 lol projects
+lol whoami                    # live cluster only — shows current oc login
 ```
+
+When a named context is active, the command and its output are appended to `commands.log`, tagged `(live)` when sourced from `oc`.
 
 ### cluster
 

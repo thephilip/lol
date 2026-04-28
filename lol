@@ -45,13 +45,15 @@ ocm commands (require ocm login; logged to ledger when in a named context):
   service-log [--size N]  Recent service log entries (default: 20)
   limited-support         Check whether the cluster has limited support reasons
 
-omc passthrough (context-aware; logged to ledger when in a named context):
+omc / oc passthrough (context-aware; logged to ledger when in a named context):
+  Falls back to live oc automatically when no must-gather is set.
   get <resource> [flags]  e.g. lol get pods -n openshift-etcd
   describe <resource>     e.g. lol describe node worker-1
   logs [flags] <pod>      e.g. lol logs -n openshift-etcd etcd-0
   top [nodes|pods]
   projects
-  extract
+  whoami                  Show current oc login (live only)
+  extract                 omc only — extract must-gather data
   adm
 
 Other:
@@ -1173,12 +1175,72 @@ cmd_upgrade() {
   git -C "$SCRIPT_DIR" log --oneline "${before}..HEAD" | cat
 }
 
+# ── oc passthrough (live cluster) ─────────────────────────────────────────
+# Read-only passthrough to a live cluster via oc. Used automatically when
+# no must-gather is set. Logged to commands.log when in a named context.
+cmd_oc_passthrough() {
+  local subcmd="$1"; shift
+
+  if ! command -v oc &>/dev/null; then
+    err "'oc' not found in PATH"
+    info "Install: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/"
+    exit 2
+  fi
+
+  if ! oc whoami &>/dev/null 2>&1; then
+    err "Not logged in to a cluster"
+    info "Log in with: oc login <api-url>  or  ocm backplane login <cluster-id>"
+    exit 1
+  fi
+
+  local no_log=false
+  local -a oc_args=()
+  for arg in "$@"; do
+    [[ "$arg" == "--no-log" ]] && no_log=true || oc_args+=("$arg")
+  done
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    local tmp_out; tmp_out="$(mktemp)"
+
+    oc "$subcmd" "${oc_args[@]}" >"$tmp_out" 2>&1 || rc=$?
+    cat "$tmp_out"
+
+    {
+      printf '[%s] $ oc %s %s (live)\n' "$ts" "$subcmd" "${oc_args[*]:-}"
+      sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out"
+      printf '\n'
+    } >> "$cmd_log"
+
+    rm -f "$tmp_out"
+  else
+    oc "$subcmd" "${oc_args[@]}" || rc=$?
+  fi
+
+  return $rc
+}
+
 # ── omc passthrough ───────────────────────────────────────────────────────
 # Ensures omc context matches lol's active must-gather, then delegates.
+# When no must-gather is set, falls back to live cluster via oc.
 # When a named context is active, the command + output are appended to
 # commands.log inside the context directory for later reference / ready-up.
 cmd_omc_passthrough() {
   local subcmd="$1"; shift
+
+  # No must-gather set — fall back to live oc transparently
+  if ! resolve_mg_path &>/dev/null 2>&1; then
+    if command -v oc &>/dev/null; then
+      info "No must-gather set — querying live cluster via oc"
+      cmd_oc_passthrough "$subcmd" "$@"
+      return $?
+    fi
+    resolve_mg_path || exit 1  # show the standard error
+  fi
 
   if ! command -v omc &>/dev/null; then
     err "'omc' not found in PATH"
@@ -1729,9 +1791,10 @@ main() {
     upgrade)  cmd_upgrade ;;
     version)  cmd_version ;;
     help)     usage ;;
-    # omc passthrough
+    # omc passthrough (falls back to live oc when no must-gather is set)
     get|describe|logs|extract|adm|projects|top)
               cmd_omc_passthrough "$cmd" "${cmd_args[@]}" ;;
+    whoami)   cmd_oc_passthrough  "$cmd" "${cmd_args[@]}" ;;
     alerts)          cmd_alerts         "${cmd_args[@]}" ;;
     service-log)     cmd_service_log    "${cmd_args[@]}" ;;
     limited-support) cmd_limited_support "${cmd_args[@]}" ;;

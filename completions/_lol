@@ -71,7 +71,7 @@ _lol() {
           _arguments \
             '--no-log[do not record this run to the context ledger]'
           ;;
-        get|describe|logs|extract|adm|projects|top)
+        get|describe|logs|extract|adm|projects|top|whoami)
           _arguments \
             '--no-log[do not record this run to the context ledger]' \
             '*: :_default'
@@ -109,13 +109,14 @@ _lol_commands() {
     'alerts:fetch live alerts from OCM'
     'service-log:fetch service log entries from OCM'
     'limited-support:check for limited support reasons via OCM'
-    'get:omc passthrough — get resources'
-    'describe:omc passthrough — describe a resource'
-    'logs:omc passthrough — view pod logs'
-    'top:omc passthrough — show node/pod resource usage'
-    'projects:omc passthrough — list projects'
-    'extract:omc passthrough — extract must-gather data'
-    'adm:omc passthrough — cluster administration'
+    'get:get resources (omc from must-gather, or live oc)'
+    'describe:describe a resource (omc from must-gather, or live oc)'
+    'logs:view pod logs (omc from must-gather, or live oc)'
+    'top:show node/pod resource usage'
+    'projects:list projects'
+    'whoami:show current oc login (live cluster only)'
+    'extract:omc only — extract must-gather data'
+    'adm:cluster administration commands'
   )
   _describe 'command' commands
 }
