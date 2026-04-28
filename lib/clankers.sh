@@ -192,8 +192,8 @@ clankers_run() {
   local context=""
   context+="## Cluster\n- OCP: ${cv_version}\n- Platform: ${platform}\n\n"
 
-  local alerts; alerts="$(omc get alerts -A 2>/dev/null \
-    | grep -i 'Firing' | head -20)" || alerts=""
+  local alerts; alerts="$(omc prometheus alertrule -s firing 2>/dev/null \
+    | head -20)" || alerts=""
   [[ -n "$alerts" ]] && context+="## Firing Alerts\n\`\`\`\n${alerts}\n\`\`\`\n\n"
 
   # Namespace or cluster data
@@ -210,9 +210,16 @@ clankers_run() {
     context+="${cluster_chunk:0:$remaining}"
   fi
 
-  # Build prompt
+  # Build prompt — prepend omc skill excerpt if available
+  # Capped at 2500 chars to stay within small-model context budgets.
+  local skill_prefix=""
+  local _omc_skill="${SCRIPT_DIR}/skills/omc.md"
+  if [[ -f "$_omc_skill" ]]; then
+    skill_prefix="$(head -c 2500 "$_omc_skill")"$'\n\n'"---"$'\n\n'
+  fi
+
   local system_prompt
-  system_prompt="You are an expert OpenShift/Kubernetes support engineer analyzing a must-gather snapshot. Be concise and technical. Quote specific error messages from the data. State the most likely root cause first, then list actionable next steps."
+  system_prompt="${skill_prefix}You are an expert OpenShift/Kubernetes support engineer analyzing a must-gather snapshot. Be concise and technical. Quote specific error messages from the data. State the most likely root cause first, then list actionable next steps. When suggesting next steps, include specific omc commands to run."
 
   local user_prompt
   user_prompt="$(printf '## Question\n%s\n\n## Must-gather Data\n%b\nAnalyse the data and answer the question. If the root cause is visible, state it clearly and quote the relevant log lines or events.' "$query" "$context")"

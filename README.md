@@ -142,6 +142,14 @@ All OCM commands require `ocm` to be installed and authenticated — see [OCM in
 
 `lol ready-up` assembles everything in the active named context — mg history, check runs, ad-hoc commands — into a structured Markdown document suitable for handing off to an AI (Claude Code, etc.) for further investigation. PII scrubbing is applied by default (IPv4 addresses, UUIDs, email addresses, cluster URLs).
 
+Pass `--with-skills` to prepend CLI skill references (`skills/omc.md`, `skills/ocm.md`) so the receiving AI knows how to use the tools without being told:
+
+```bash
+lol ready-up --with-skills             # include all skills
+lol ready-up --with-skills omc         # include specific skill(s)
+lol ready-up --with-skills omc,ocm -o handoff.md
+```
+
 ---
 
 ## Installation

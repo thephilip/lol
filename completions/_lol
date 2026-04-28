@@ -54,7 +54,8 @@ _lol() {
         ready-up)
           _arguments \
             '--no-redact[skip PII scrubbing (for internal/self-hosted AI only)]' \
-            '(-o --output)'{-o,--output}'[write to file instead of stdout]:output file:_files'
+            '(-o --output)'{-o,--output}'[write to file instead of stdout]:output file:_files' \
+            '--with-skills[prepend CLI skill docs (all skills, or comma-separated names)]:skills (e.g. omc,ocm)'
           ;;
         service-log)
           _arguments \
