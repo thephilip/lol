@@ -1159,7 +1159,7 @@ cmd_upgrade() {
   ok "Upgraded to $after"
   echo
   info "Changes:"
-  git --no-pager -C "$SCRIPT_DIR" log --oneline "${before}..HEAD"
+  git -C "$SCRIPT_DIR" log --oneline "${before}..HEAD" | cat
 }
 
 # ── omc passthrough ───────────────────────────────────────────────────────
