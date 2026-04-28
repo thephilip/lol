@@ -56,6 +56,8 @@ omc passthrough (context-aware; logged to ledger when in a named context):
 
 Other:
   reset                   Remove all lol session data and return to factory state
+  ask ["question"]        AI chat with omc/ocm skills and cluster context
+                          No argument starts an interactive session
   completion <shell>      Output shell completion script (supported: zsh)
 
 Global flags:
@@ -1429,6 +1431,22 @@ cmd_version() {
   echo
 }
 
+# ── cmd: ask ──────────────────────────────────────────────────────────────
+cmd_ask() {
+  local no_log=false
+  local -a words=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-log) no_log=true; shift ;;
+      *) words+=("$1"); shift ;;
+    esac
+  done
+
+  local question="${words[*]}"
+  clankers_ask "$question" "$LOL_CLANKERS_MODEL" "$no_log"
+}
+
 # ── cmd: config ───────────────────────────────────────────────────────────
 cmd_config() {
   local cfg="$LOL_CONFIG_DIR/config.env"
@@ -1670,6 +1688,7 @@ main() {
     cluster)  cmd_cluster  "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
+    ask)      cmd_ask      "${cmd_args[@]}" ;;
     config)   cmd_config ;;
     list)     cmd_list ;;
     status)   cmd_status ;;

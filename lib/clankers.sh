@@ -569,3 +569,272 @@ clankers_run() {
   printf "${BOLD}${CYAN}└────────────────────────────────────────────────────────────────${RESET}\n"
   echo
 }
+
+# ── Multi-turn chat functions ──────────────────────────────────────────────
+# These mirror the _clankers_send_* functions but accept a full messages
+# JSON array instead of a single prompt, enabling conversation history.
+
+# ollama — /api/chat for multi-turn; system goes in messages array
+_clankers_chat_ollama() {
+  local model="$1" system="$2" messages="$3"
+  local full_messages
+  full_messages="$(printf '%s' "$messages" | jq --arg s "$system" \
+    '[{"role":"system","content":$s}] + .')"
+
+  curl -sN "${LOL_CLANKERS_API}/api/chat" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg m "$model" --argjson msgs "$full_messages" \
+          '{model:$m, messages:$msgs, stream:true}')" \
+  | while IFS= read -r line; do
+      local done_flag; done_flag="$(printf '%s' "$line" | jq -r '.done' 2>/dev/null)"
+      if [[ "$done_flag" == "true" ]]; then
+        local eval_count eval_dur
+        eval_count="$(printf '%s' "$line" | jq -r '.eval_count // 0')"
+        eval_dur="$(  printf '%s' "$line" | jq -r '.eval_duration // 0')"
+        if [[ "$eval_dur" -gt 0 ]]; then
+          local tps; tps=$(( eval_count * 1000000000 / eval_dur ))
+          printf "\n\n${DIM}%d tokens · %d tok/s${RESET}\n" "$eval_count" "$tps"
+        fi
+      else
+        local token; token="$(printf '%s' "$line" | jq -r '.message.content // empty' 2>/dev/null)"
+        [[ -n "$token" ]] && printf '%s' "$token"
+      fi
+    done
+}
+
+# Claude API — cached system prompt, messages array for history
+_clankers_chat_claude() {
+  local model="$1" system="$2" messages="$3"
+  local payload
+  payload="$(jq -n \
+    --arg m "$model" --arg s "$system" --argjson msgs "$messages" \
+    '{
+      model: $m, max_tokens: 2048,
+      system: [{"type":"text","text":$s,"cache_control":{"type":"ephemeral"}}],
+      messages: $msgs, stream: true
+    }')"
+
+  curl -sN "https://api.anthropic.com/v1/messages" \
+    -H "x-api-key: ${LOL_CLANKERS_API_KEY}" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "anthropic-beta: prompt-caching-2024-07-31" \
+    -H "content-type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      local type; type="$(printf '%s' "$json" | jq -r '.type // empty' 2>/dev/null)"
+      case "$type" in
+        content_block_delta)
+          printf '%s' "$(printf '%s' "$json" | jq -r '.delta.text // empty' 2>/dev/null)"
+          ;;
+        message_delta)
+          local t; t="$(printf '%s' "$json" | jq -r '.usage.output_tokens // 0' 2>/dev/null)"
+          printf "\n\n${DIM}%s output tokens${RESET}\n" "$t"
+          ;;
+      esac
+    done
+}
+
+# Vertex AI — Claude via Google Cloud, messages array
+_clankers_chat_vertex() {
+  local model="$1" system="$2" messages="$3"
+  local proj="${LOL_VERTEX_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+  local region="${LOL_VERTEX_REGION:-us-east5}"
+  local token
+  token="$(gcloud auth application-default print-access-token 2>/dev/null)" || {
+    err "Could not get GCP access token — run: gcloud auth application-default login"
+    return 1
+  }
+  local endpoint="https://${region}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${region}/publishers/anthropic/models/${model}:streamRawPredict"
+  local payload
+  payload="$(jq -n \
+    --arg s "$system" --argjson msgs "$messages" \
+    '{"anthropic_version":"vertex-2023-10-16","max_tokens":2048,"system":$s,"messages":$msgs,"stream":true}')"
+
+  curl -sN "$endpoint" \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      local type; type="$(printf '%s' "$json" | jq -r '.type // empty' 2>/dev/null)"
+      case "$type" in
+        content_block_delta)
+          printf '%s' "$(printf '%s' "$json" | jq -r '.delta.text // empty' 2>/dev/null)"
+          ;;
+        message_delta)
+          local t; t="$(printf '%s' "$json" | jq -r '.usage.output_tokens // 0' 2>/dev/null)"
+          printf "\n\n${DIM}%s output tokens${RESET}\n" "$t"
+          ;;
+      esac
+    done
+}
+
+# OpenAI-compatible — messages array with system prepended
+_clankers_chat_openai() {
+  local model="$1" system="$2" messages="$3"
+  local base="${LOL_CLANKERS_API:-https://api.openai.com}"
+  local full_messages
+  full_messages="$(printf '%s' "$messages" | jq --arg s "$system" \
+    '[{"role":"system","content":$s}] + .')"
+  local payload
+  payload="$(jq -n --arg m "$model" --argjson msgs "$full_messages" \
+    '{model:$m, messages:$msgs, stream:true}')"
+
+  curl -sN "${base}/v1/chat/completions" \
+    -H "Authorization: Bearer ${LOL_CLANKERS_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      [[ "$json" == "[DONE]" ]] && break
+      local token; token="$(printf '%s' "$json" | jq -r '.choices[0].delta.content // empty' 2>/dev/null)"
+      [[ -n "$token" ]] && printf '%s' "$token"
+    done
+}
+
+# Dispatcher for multi-turn chat
+_clankers_chat() {
+  local backend="${LOL_CLANKERS_BACKEND:-ollama}"
+  case "$backend" in
+    claude)  _clankers_chat_claude  "$@" ;;
+    vertex)  _clankers_chat_vertex  "$@" ;;
+    openai)  _clankers_chat_openai  "$@" ;;
+    *)       _clankers_chat_ollama  "$@" ;;
+  esac
+}
+
+# ── clankers_ask ───────────────────────────────────────────────────────────
+# Main entry point for lol ask.
+# Args: question (empty = interactive), model, no_log flag
+clankers_ask() {
+  local question="$1"
+  local model="${2:-$LOL_CLANKERS_MODEL}"
+  local no_log="${3:-false}"
+
+  clankers_check_deps "$model" || return 1
+
+  local backend="${LOL_CLANKERS_BACKEND:-ollama}"
+
+  # ── Build system prompt ─────────────────────────────────────────────────
+  # Skills: full content for cloud backends, capped for ollama
+  local system_prompt=""
+  local skill_cap=3000
+  [[ "$backend" != "ollama" ]] && skill_cap=0
+
+  for _skill in "$SCRIPT_DIR/skills/omc.md" "$SCRIPT_DIR/skills/ocm.md"; do
+    [[ -f "$_skill" ]] || continue
+    if [[ "$skill_cap" -gt 0 ]]; then
+      system_prompt+="$(head -c "$skill_cap" "$_skill")"
+    else
+      system_prompt+="$(cat "$_skill")"
+    fi
+    system_prompt+=$'\n\n---\n\n'
+  done
+
+  # Cluster context: must-gather + cluster ID
+  local cluster_context=""
+  local mg_path; mg_path="$(resolve_mg_path 2>/dev/null)" || mg_path=""
+  if [[ -n "$mg_path" && -d "$mg_path" ]]; then
+    if command omc use "$mg_path" &>/dev/null 2>&1; then
+      local version; version="$(omc get clusterversion version \
+        -o jsonpath='{.status.history[0].version}' 2>/dev/null)" || version=""
+      cluster_context+="## Active must-gather\nPath: ${mg_path}\n"
+      [[ -n "$version" ]] && cluster_context+="OCP version: ${version}\n"
+      local alerts; alerts="$(omc prometheus alertrule -s firing 2>/dev/null | head -10)" || alerts=""
+      [[ -n "$alerts" ]] && cluster_context+="### Firing alerts\n\`\`\`\n${alerts}\n\`\`\`\n"
+    fi
+  fi
+  local cluster_id; cluster_id="$(resolve_cluster_id 2>/dev/null)" || cluster_id=""
+  [[ -n "$cluster_id" && -z "$cluster_context" ]] && \
+    cluster_context+="## Cluster\nID: ${cluster_id}\n"
+
+  [[ -n "$cluster_context" ]] && \
+    system_prompt+="$(printf '## Current session context\n%b' "$cluster_context")"$'\n\n---\n\n'
+
+  system_prompt+="You are an expert OpenShift and Red Hat support engineer. Answer concisely and technically. When recommending investigation steps, provide specific omc or ocm commands and explain what to look for in the output."
+
+  # ── Session header ──────────────────────────────────────────────────────
+  section "lol ask (${backend} · ${model})"
+  [[ -n "$mg_path" ]]    && info "Must-gather: ${mg_path}"
+  [[ -n "$cluster_id" ]] && info "Cluster ID:  ${cluster_id}"
+  [[ -z "$mg_path" && -z "$cluster_id" ]] && \
+    info "No cluster context set — answering from skills only"
+  echo
+
+  local ctx; ctx="$(active_ctx)"
+  local cmd_log=""
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    cmd_log="$(ctx_dir "$ctx")/commands.log"
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    printf '[%s] $ lol ask session start (backend: %s, model: %s)\n' \
+      "$ts" "$backend" "$model" >> "$cmd_log"
+  fi
+
+  # ── Conversation loop ───────────────────────────────────────────────────
+  local messages='[]'
+  local turn=0
+
+  while true; do
+    local user_input=""
+
+    if [[ $turn -eq 0 && -n "$question" ]]; then
+      user_input="$question"
+    else
+      echo
+      if command -v gum &>/dev/null; then
+        user_input="$(gum input \
+          --placeholder "Ask a question (empty or 'exit' to quit)" \
+          --prompt "You: " \
+          --width 80)"
+      else
+        read -rp "You: " user_input
+      fi
+      [[ -z "$user_input" || "${user_input,,}" =~ ^(exit|quit|q)$ ]] && break
+    fi
+
+    # Add user message to history
+    messages="$(printf '%s' "$messages" | \
+      jq --arg c "$user_input" '. + [{"role":"user","content":$c}]')"
+
+    # Stream response, capturing to temp file for history
+    echo
+    printf "${BOLD}${CYAN}┌─ Response ─────────────────────────────────────────────────────${RESET}\n"
+    echo
+
+    local resp_file; resp_file="$(mktemp)"
+    _clankers_chat "$model" "$system_prompt" "$messages" | tee "$resp_file"
+    echo
+    printf "${BOLD}${CYAN}└────────────────────────────────────────────────────────────────${RESET}\n"
+
+    # Capture clean response for history and logging (strip ANSI + stats line)
+    local assistant_response
+    assistant_response="$(sed 's/\x1b\[[0-9;]*[mK]//g' "$resp_file" \
+      | grep -v " output tokens" | grep -v "tok/s" | sed '/^[[:space:]]*$/d')"
+    rm -f "$resp_file"
+
+    # Add assistant response to history
+    messages="$(printf '%s' "$messages" | \
+      jq --arg c "$assistant_response" '. + [{"role":"assistant","content":$c}]')"
+
+    # Log this turn to commands.log
+    if [[ -n "$cmd_log" ]]; then
+      local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+      {
+        printf '[%s] You: %s\n' "$ts" "$user_input"
+        printf 'Assistant: %s\n\n' "$assistant_response"
+      } >> "$cmd_log"
+    fi
+
+    (( turn++ )) || true
+    # Exit after first response in single-shot mode
+    [[ -n "$question" ]] && break
+  done
+
+  [[ -n "$cmd_log" ]] && \
+    printf '[%s] $ lol ask session end (%d turn(s))\n\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%S)" "$turn" >> "$cmd_log"
+}
