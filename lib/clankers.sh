@@ -58,6 +58,97 @@ clankers_infer_namespaces() {
   printf '%s\n' "${seen[@]:-}"
 }
 
+# ── Connectivity test ─────────────────────────────────────────────────────
+# clankers_test <backend> <model> <api> <api_key>
+#   Tests reachability and auth for the given backend config.
+#   Returns 0 on success, 1 on failure. Prints status with ok/warn/err.
+clankers_test() {
+  local backend="$1" model="$2" api="$3" api_key="$4"
+
+  command -v curl &>/dev/null || { err "curl is required but not found"; return 1; }
+  command -v jq   &>/dev/null || { err "jq is required but not found";   return 1; }
+
+  case "$backend" in
+    claude)
+      if [[ -z "$api_key" ]]; then
+        err "No API key configured"; return 1
+      fi
+      info "Testing Claude API connectivity..."
+      local resp http_code
+      resp="$(curl -sw "%{http_code}" -o /tmp/_lol_ctest.json \
+        "https://api.anthropic.com/v1/models" \
+        -H "x-api-key: ${api_key}" \
+        -H "anthropic-version: 2023-06-01" 2>/dev/null)"
+      http_code="${resp: -3}"
+      case "$http_code" in
+        200)
+          local models; models="$(jq -r '.data[].id' /tmp/_lol_ctest.json 2>/dev/null | head -5 | tr '\n' ' ')"
+          ok "Claude API reachable — available models: ${models}"
+          if jq -r '.data[].id' /tmp/_lol_ctest.json 2>/dev/null | grep -qx "$model"; then
+            ok "Model '${model}' is available"
+          else
+            warn "Model '${model}' not found in your account — check the model ID"
+          fi
+          ;;
+        401) err "Authentication failed — check your API key"; return 1 ;;
+        403) err "Forbidden — your key may not have access to this resource"; return 1 ;;
+        *)   err "Unexpected response (HTTP ${http_code}) from Claude API"; return 1 ;;
+      esac
+      rm -f /tmp/_lol_ctest.json
+      ;;
+
+    openai)
+      if [[ -z "$api_key" ]]; then
+        err "No API key configured"; return 1
+      fi
+      local base="${api:-https://api.openai.com}"
+      info "Testing OpenAI-compatible endpoint: ${base}"
+      local resp http_code
+      resp="$(curl -sw "%{http_code}" -o /tmp/_lol_ctest.json \
+        "${base}/v1/models" \
+        -H "Authorization: Bearer ${api_key}" 2>/dev/null)"
+      http_code="${resp: -3}"
+      case "$http_code" in
+        200)
+          local count; count="$(jq '.data | length' /tmp/_lol_ctest.json 2>/dev/null)"
+          ok "Endpoint reachable — ${count} model(s) available"
+          if jq -r '.data[].id' /tmp/_lol_ctest.json 2>/dev/null | grep -qx "$model"; then
+            ok "Model '${model}' is available"
+          else
+            warn "Model '${model}' not listed — it may still work, or check the model ID"
+          fi
+          ;;
+        401) err "Authentication failed — check your API key"; return 1 ;;
+        404) err "Endpoint not found — check the API URL (${base})"; return 1 ;;
+        *)   err "Unexpected response (HTTP ${http_code}) from ${base}"; return 1 ;;
+      esac
+      rm -f /tmp/_lol_ctest.json
+      ;;
+
+    ollama|*)
+      local endpoint="${api:-http://localhost:11434}"
+      info "Testing ollama at ${endpoint}..."
+      if ! curl -sf "${endpoint}/api/tags" &>/dev/null; then
+        err "ollama is not reachable at ${endpoint}"
+        info "Start it with: ollama serve"
+        return 1
+      fi
+      ok "ollama is reachable"
+
+      local available
+      available="$(curl -sf "${endpoint}/api/tags" | jq -r '.models[].name' 2>/dev/null)"
+      local model_base="${model%%:*}"
+      if printf '%s\n' "$available" | grep -q "^${model_base}"; then
+        ok "Model '${model}' is pulled and ready"
+      else
+        warn "Model '${model}' is not pulled locally"
+        info "Run: ollama pull ${model}"
+        return 1
+      fi
+      ;;
+  esac
+}
+
 # ── Dependency checks ──────────────────────────────────────────────────────
 clankers_check_deps() {
   local model="$1"

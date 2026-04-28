@@ -1466,7 +1466,7 @@ cmd_config() {
       openai) opts+=("Endpoint   → ${api}" "API key    → ${key_display}") ;;
       claude) opts+=("API key    → ${key_display}") ;;
     esac
-    opts+=("View config file" "Save and exit" "Exit without saving")
+    opts+=("Test connection" "View config file" "Save and exit" "Exit without saving")
 
     local choice
     choice="$(_tui_choose "Select a setting to change:" "${opts[@]}")"
@@ -1502,6 +1502,11 @@ cmd_config() {
         fi
         [[ -n "$new_key" ]] && { api_key="$new_key"; changed=true; }
         ;;
+      Test*)
+        echo
+        clankers_test "$backend" "$model" "$api" "$api_key"
+        echo
+        ;;
       View*)
         echo
         if [[ -f "$cfg" ]]; then
@@ -1512,6 +1517,13 @@ cmd_config() {
         echo
         ;;
       Save*)
+        echo
+        info "Testing connection before saving..."
+        if ! clankers_test "$backend" "$model" "$api" "$api_key"; then
+          echo
+          warn "Connection test failed — config will still be saved."
+          _tui_confirm "Save anyway?" || { info "Save cancelled."; continue; }
+        fi
         {
           echo "# lol configuration — keep this file private if it contains API keys"
           echo "LOL_CLANKERS_BACKEND=${backend}"
@@ -1521,6 +1533,7 @@ cmd_config() {
           [[ -n "$api_key" ]] && echo "LOL_CLANKERS_API_KEY=${api_key}"
         } > "$cfg"
         chmod 600 "$cfg"
+        echo
         ok "Saved: $cfg"
         break
         ;;
