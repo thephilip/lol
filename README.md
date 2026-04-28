@@ -296,12 +296,12 @@ lol infers the relevant namespace(s) from keywords in your query (`marketplace`,
 
 ## OCM integration
 
-Some commands query live cluster data via [`ocm`](https://github.com/openshift-online/ocm-cli) — the OpenShift Cluster Manager CLI. These commands require `ocm` to be installed and authenticated with a Red Hat account that has access to the cluster.
+Some commands query live cluster data via [`ocm`](https://github.com/openshift-online/ocm-cli) — the OpenShift Cluster Manager CLI. These commands require `ocm` to be installed and authenticated with an account that has access to the cluster.
 
 | Command | Requires `ocm` | What it fetches |
 |---------|:--------------:|-----------------|
 | `lol alerts` | No | Alert state from the active must-gather (via `omc`) |
-| `lol service-log` | Yes | Recent service log entries posted by Red Hat for the cluster |
+| `lol service-log` | Yes | Recent service log entries posted for the cluster |
 | `lol limited-support` | Yes | Whether the cluster has limited support reasons on record |
 | Everything else | No | Fully offline — works against any must-gather |
 
