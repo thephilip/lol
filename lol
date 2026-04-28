@@ -1439,12 +1439,15 @@ cmd_config() {
   local model="${LOL_CLANKERS_MODEL:-gemma2:2b}"
   local api="${LOL_CLANKERS_API:-http://localhost:11434}"
   local api_key="${LOL_CLANKERS_API_KEY:-}"
+  local vertex_project="${LOL_VERTEX_PROJECT:-}"
+  local vertex_region="${LOL_VERTEX_REGION:-us-east5}"
   local changed=false
 
   # Default models per backend (suggested when switching)
   _default_model() {
     case "$1" in
       claude) echo "claude-haiku-4-5-20251001" ;;
+      vertex) echo "claude-haiku-4-5@20251001" ;;
       openai) echo "gpt-4o-mini" ;;
       *)      echo "gemma2:2b" ;;
     esac
@@ -1465,6 +1468,8 @@ cmd_config() {
       ollama) opts+=("Endpoint   → ${api}") ;;
       openai) opts+=("Endpoint   → ${api}" "API key    → ${key_display}") ;;
       claude) opts+=("API key    → ${key_display}") ;;
+      vertex) opts+=("GCP project → ${vertex_project:-(auto-detect)}"
+                     "GCP region  → ${vertex_region}") ;;
     esac
     opts+=("Test connection" "View config file" "Save and exit" "Exit without saving")
 
@@ -1476,12 +1481,34 @@ cmd_config() {
         local new_backend
         new_backend="$(_tui_choose "Select AI backend:" \
           "ollama  — local model via Ollama (privacy-safe, no API key needed)" \
-          "claude  — Anthropic Claude API (higher quality, requires API key)" \
-          "openai  — OpenAI-compatible endpoint (OpenAI, Azure, local LM Studio, etc.)")"
+          "claude  — Anthropic Claude API (requires API key)" \
+          "vertex  — Claude via Google Cloud Vertex AI (uses gcloud credentials)" \
+          "openai  — OpenAI-compatible endpoint (OpenAI, Azure, LM Studio, etc.)")"
         case "$new_backend" in
-          ollama*) backend="ollama"; model="$(_default_model ollama)"; api="http://localhost:11434" ;;
-          claude*) backend="claude"; model="$(_default_model claude)" ;;
-          openai*) backend="openai"; model="$(_default_model openai)" ;;
+          ollama*)
+            backend="ollama"; model="$(_default_model ollama)"; api="http://localhost:11434"
+            ;;
+          claude*)
+            backend="claude"; model="$(_default_model claude)"
+            ;;
+          vertex*)
+            backend="vertex"; model="$(_default_model vertex)"
+            # Auto-detect GCP project
+            if command -v gcloud &>/dev/null; then
+              local detected; detected="$(gcloud config get-value project 2>/dev/null)"
+              if [[ -n "$detected" && "$detected" != "(unset)" ]]; then
+                vertex_project="$detected"
+                ok "Auto-detected GCP project: ${vertex_project}"
+              else
+                info "Could not auto-detect project — set it manually in the menu"
+              fi
+            else
+              warn "gcloud not found — install Google Cloud SDK to use Vertex AI"
+            fi
+            ;;
+          openai*)
+            backend="openai"; model="$(_default_model openai)"
+            ;;
         esac
         [[ -n "$new_backend" ]] && changed=true
         ;;
@@ -1492,6 +1519,23 @@ cmd_config() {
       Endpoint*)
         local new; new="$(_tui_input "API endpoint" "$api")"
         [[ -n "$new" ]] && { api="$new"; changed=true; }
+        ;;
+      GCP\ project*)
+        local new; new="$(_tui_input "GCP project ID" "$vertex_project")"
+        [[ -n "$new" ]] && { vertex_project="$new"; changed=true; }
+        ;;
+      GCP\ region*)
+        local new_region
+        new_region="$(_tui_choose "Select Vertex AI region:" \
+          "us-east5       — US East (Ohio) — lowest latency for most US users" \
+          "europe-west1   — Belgium" \
+          "asia-southeast1 — Singapore")"
+        case "$new_region" in
+          us-east5*)       vertex_region="us-east5" ;;
+          europe-west1*)   vertex_region="europe-west1" ;;
+          asia-southeast1*) vertex_region="asia-southeast1" ;;
+        esac
+        [[ -n "$new_region" ]] && changed=true
         ;;
       API\ key*)
         local new_key
@@ -1504,7 +1548,7 @@ cmd_config() {
         ;;
       Test*)
         echo
-        clankers_test "$backend" "$model" "$api" "$api_key"
+        clankers_test "$backend" "$model" "$api" "$api_key" "$vertex_project" "$vertex_region"
         echo
         ;;
       View*)
@@ -1519,7 +1563,7 @@ cmd_config() {
       Save*)
         echo
         info "Testing connection before saving..."
-        if ! clankers_test "$backend" "$model" "$api" "$api_key"; then
+        if ! clankers_test "$backend" "$model" "$api" "$api_key" "$vertex_project" "$vertex_region"; then
           echo
           warn "Connection test failed — config will still be saved."
           _tui_confirm "Save anyway?" || { info "Save cancelled."; continue; }
@@ -1531,6 +1575,10 @@ cmd_config() {
           [[ "$backend" == "ollama" || "$backend" == "openai" ]] && \
             echo "LOL_CLANKERS_API=${api}"
           [[ -n "$api_key" ]] && echo "LOL_CLANKERS_API_KEY=${api_key}"
+          if [[ "$backend" == "vertex" ]]; then
+            [[ -n "$vertex_project" ]] && echo "LOL_VERTEX_PROJECT=${vertex_project}"
+            echo "LOL_VERTEX_REGION=${vertex_region}"
+          fi
         } > "$cfg"
         chmod 600 "$cfg"
         echo

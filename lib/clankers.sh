@@ -7,6 +7,8 @@ LOL_CLANKERS_BACKEND="${LOL_CLANKERS_BACKEND:-ollama}"
 LOL_CLANKERS_MODEL="${LOL_CLANKERS_MODEL:-gemma2:2b}"
 LOL_CLANKERS_API="${LOL_CLANKERS_API:-http://localhost:11434}"
 LOL_CLANKERS_API_KEY="${LOL_CLANKERS_API_KEY:-}"
+LOL_VERTEX_PROJECT="${LOL_VERTEX_PROJECT:-}"
+LOL_VERTEX_REGION="${LOL_VERTEX_REGION:-us-east5}"
 _CLANKERS_MAX_CHARS=18000   # context budget (leaves room for prompt overhead + response)
 
 # ── Namespace inference ────────────────────────────────────────────────────
@@ -59,11 +61,13 @@ clankers_infer_namespaces() {
 }
 
 # ── Connectivity test ─────────────────────────────────────────────────────
-# clankers_test <backend> <model> <api> <api_key>
+# clankers_test <backend> <model> <api> <api_key> [vertex_project] [vertex_region]
 #   Tests reachability and auth for the given backend config.
 #   Returns 0 on success, 1 on failure. Prints status with ok/warn/err.
 clankers_test() {
   local backend="$1" model="$2" api="$3" api_key="$4"
+  local vertex_project="${5:-$LOL_VERTEX_PROJECT}"
+  local vertex_region="${6:-$LOL_VERTEX_REGION}"
 
   command -v curl &>/dev/null || { err "curl is required but not found"; return 1; }
   command -v jq   &>/dev/null || { err "jq is required but not found";   return 1; }
@@ -125,6 +129,55 @@ clankers_test() {
       rm -f /tmp/_lol_ctest.json
       ;;
 
+    vertex)
+      if ! command -v gcloud &>/dev/null; then
+        err "gcloud CLI not found — required for Vertex AI backend"
+        info "Install: https://cloud.google.com/sdk/docs/install"
+        return 1
+      fi
+      info "Testing Vertex AI connectivity..."
+
+      local token
+      token="$(gcloud auth application-default print-access-token 2>/dev/null)" || {
+        err "Could not get GCP access token"
+        info "Run: gcloud auth application-default login"
+        return 1
+      }
+      ok "GCP credentials valid"
+
+      local proj="${vertex_project:-$(gcloud config get-value project 2>/dev/null)}"
+      if [[ -z "$proj" || "$proj" == "(unset)" ]]; then
+        err "No GCP project set"
+        info "Run: gcloud config set project <project-id>"
+        return 1
+      fi
+      ok "GCP project: ${proj}"
+
+      local region="${vertex_region:-us-east5}"
+      local endpoint="https://${region}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${region}/publishers/anthropic/models/${model}:rawPredict"
+
+      info "Testing model '${model}' in ${region}..."
+      local http_code
+      http_code="$(curl -s -o /tmp/_lol_ctest.json -w "%{http_code}" \
+        "$endpoint" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "{\"anthropic_version\":\"vertex-2023-10-16\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+        2>/dev/null)"
+      case "$http_code" in
+        200|400) ok "Model '${model}' is accessible on Vertex AI" ;;
+        401|403) err "Auth failed — ensure Vertex AI API is enabled and your account has access"
+                 info "Enable API: gcloud services enable aiplatform.googleapis.com"
+                 rm -f /tmp/_lol_ctest.json; return 1 ;;
+        404)     err "Model or region not found — check model ID and region"
+                 info "Available regions: us-east5, europe-west1, asia-southeast1"
+                 rm -f /tmp/_lol_ctest.json; return 1 ;;
+        *)       err "Unexpected response (HTTP ${http_code}) from Vertex AI"
+                 rm -f /tmp/_lol_ctest.json; return 1 ;;
+      esac
+      rm -f /tmp/_lol_ctest.json
+      ;;
+
     ollama|*)
       local endpoint="${api:-http://localhost:11434}"
       info "Testing ollama at ${endpoint}..."
@@ -171,6 +224,18 @@ clankers_check_deps() {
         info "Run: lol config  or set it in ~/.config/lol/config.env"
         return 1
       }
+      ;;
+    vertex)
+      command -v gcloud &>/dev/null || {
+        err "gcloud CLI not found — required for Vertex AI backend"
+        info "Install: https://cloud.google.com/sdk/docs/install"
+        return 1
+      }
+      local proj="${LOL_VERTEX_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+      if [[ -z "$proj" || "$proj" == "(unset)" ]]; then
+        err "No GCP project set — run: gcloud config set project <id>  or set LOL_VERTEX_PROJECT"
+        return 1
+      fi
       ;;
     ollama|*)
       if ! curl -sf "${LOL_CLANKERS_API}/api/tags" &>/dev/null; then
@@ -326,6 +391,54 @@ _clankers_send_claude() {
     done
 }
 
+# Vertex AI — Claude via Google Cloud, uses Application Default Credentials.
+# SSE response format is identical to the Claude API.
+_clankers_send_vertex() {
+  local model="$1" system_prompt="$2" user_prompt="$3"
+  local proj="${LOL_VERTEX_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+  local region="${LOL_VERTEX_REGION:-us-east5}"
+
+  local token
+  token="$(gcloud auth application-default print-access-token 2>/dev/null)" || {
+    err "Could not get GCP access token — run: gcloud auth application-default login"
+    return 1
+  }
+
+  local endpoint="https://${region}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${region}/publishers/anthropic/models/${model}:streamRawPredict"
+
+  local payload
+  payload="$(jq -n \
+    --arg system  "$system_prompt" \
+    --arg content "$user_prompt" \
+    '{
+      anthropic_version: "vertex-2023-10-16",
+      max_tokens: 2048,
+      system: $system,
+      messages: [{"role": "user", "content": $content}],
+      stream: true
+    }')"
+
+  curl -sN "$endpoint" \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      local type; type="$(printf '%s' "$json" | jq -r '.type // empty' 2>/dev/null)"
+      case "$type" in
+        content_block_delta)
+          local token; token="$(printf '%s' "$json" | jq -r '.delta.text // empty' 2>/dev/null)"
+          printf '%s' "$token"
+          ;;
+        message_delta)
+          local out_tok; out_tok="$(printf '%s' "$json" | jq -r '.usage.output_tokens // 0' 2>/dev/null)"
+          printf "\n\n${DIM}%s output tokens${RESET}\n" "$out_tok"
+          ;;
+      esac
+    done
+}
+
 # OpenAI-compatible — works with any endpoint using the chat/completions API
 _clankers_send_openai() {
   local model="$1" system_prompt="$2" user_prompt="$3"
@@ -362,9 +475,10 @@ _clankers_send_openai() {
 _clankers_send() {
   local backend="${LOL_CLANKERS_BACKEND:-ollama}"
   case "$backend" in
-    claude) _clankers_send_claude "$@" ;;
-    openai) _clankers_send_openai "$@" ;;
-    *)      _clankers_send_ollama "$@" ;;
+    claude)  _clankers_send_claude  "$@" ;;
+    vertex)  _clankers_send_vertex  "$@" ;;
+    openai)  _clankers_send_openai  "$@" ;;
+    *)       _clankers_send_ollama  "$@" ;;
   esac
 }
 
