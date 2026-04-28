@@ -313,7 +313,7 @@ Some commands query live cluster data via [`ocm`](https://github.com/openshift-o
 #    Quickstart (requires Go):
 go install github.com/openshift-online/ocm-cli/cmd/ocm@latest
 
-# 2. Log in with your Red Hat SSO credentials
+# 2. Log in with your credentials
 ocm login --use-auth-code
 
 # 3. Verify
@@ -331,7 +331,7 @@ ocm whoami
 
 ### Data that persists on disk
 
-If you remove `ocm` or `lol`, or rotate your Red Hat credentials, be aware of what lingers:
+If you remove `ocm` or `lol`, or rotate your credentials, be aware of what lingers:
 
 | Location | What's there | How to clear |
 |----------|-------------|--------------|
