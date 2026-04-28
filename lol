@@ -67,10 +67,10 @@ Options for check and omc passthrough:
   --no-log                Don't record this run to the context ledger
 
 Options for check:
-  --with-clankers "query" Run a local AI analysis against the must-gather
-  --clankers-model <name> Model to use (default: gemma2:2b, env: LOL_CLANKERS_MODEL)
-                          If no check names are given, AI analysis runs without
-                          first running the standard checks.
+  --with-clankers "query" Run AI analysis against the must-gather
+  --clankers-model <name> Model override (default: gemma2:2b, env: LOL_CLANKERS_MODEL)
+  --clankers-backend <b>  Backend override: ollama|claude|openai (env: LOL_CLANKERS_BACKEND)
+                          Configure defaults with: lol config
 
 Options for ready-up:
   --no-redact             Skip PII scrubbing (for internal/self-hosted AI only)
@@ -521,11 +521,12 @@ cmd_check() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --no-log)          no_log=true; shift ;;
-      --with-clankers)   clankers_query="$2"; shift 2 ;;
-      --clankers-model)  clankers_model="$2"; shift 2 ;;
-      -*)                err "Unknown option: $1"; usage; exit 1 ;;
-      *)                 IFS=',' read -ra _names <<< "$1"; check_names+=("${_names[@]}"); shift ;;
+      --no-log)            no_log=true; shift ;;
+      --with-clankers)     clankers_query="$2"; shift 2 ;;
+      --clankers-model)    clankers_model="$2"; shift 2 ;;
+      --clankers-backend)  LOL_CLANKERS_BACKEND="$2"; export LOL_CLANKERS_BACKEND; shift 2 ;;
+      -*)                  err "Unknown option: $1"; usage; exit 1 ;;
+      *)                   IFS=',' read -ra _names <<< "$1"; check_names+=("${_names[@]}"); shift ;;
     esac
   done
 
@@ -1434,29 +1435,72 @@ cmd_config() {
   mkdir -p "$LOL_CONFIG_DIR"
   [[ -f "$cfg" ]] && source "$cfg" 2>/dev/null
 
+  local backend="${LOL_CLANKERS_BACKEND:-ollama}"
   local model="${LOL_CLANKERS_MODEL:-gemma2:2b}"
   local api="${LOL_CLANKERS_API:-http://localhost:11434}"
+  local api_key="${LOL_CLANKERS_API_KEY:-}"
   local changed=false
+
+  # Default models per backend (suggested when switching)
+  _default_model() {
+    case "$1" in
+      claude) echo "claude-haiku-4-5-20251001" ;;
+      openai) echo "gpt-4o-mini" ;;
+      *)      echo "gemma2:2b" ;;
+    esac
+  }
 
   section "lol config"
 
   while true; do
+    local key_display="(not set)"
+    [[ -n "$api_key" ]] && key_display="***"
+
+    # Build menu options dynamically based on current backend
+    local -a opts=(
+      "Backend    → ${backend}"
+      "Model      → ${model}"
+    )
+    case "$backend" in
+      ollama) opts+=("Endpoint   → ${api}") ;;
+      openai) opts+=("Endpoint   → ${api}" "API key    → ${key_display}") ;;
+      claude) opts+=("API key    → ${key_display}") ;;
+    esac
+    opts+=("View config file" "Save and exit" "Exit without saving")
+
     local choice
-    choice="$(_tui_choose "Select a setting to change:" \
-      "AI model      → ${model}" \
-      "AI endpoint   → ${api}" \
-      "View config file" \
-      "Save and exit" \
-      "Exit without saving")"
+    choice="$(_tui_choose "Select a setting to change:" "${opts[@]}")"
 
     case "$choice" in
-      AI\ model*)
+      Backend*)
+        local new_backend
+        new_backend="$(_tui_choose "Select AI backend:" \
+          "ollama  — local model via Ollama (privacy-safe, no API key needed)" \
+          "claude  — Anthropic Claude API (higher quality, requires API key)" \
+          "openai  — OpenAI-compatible endpoint (OpenAI, Azure, local LM Studio, etc.)")"
+        case "$new_backend" in
+          ollama*) backend="ollama"; model="$(_default_model ollama)"; api="http://localhost:11434" ;;
+          claude*) backend="claude"; model="$(_default_model claude)" ;;
+          openai*) backend="openai"; model="$(_default_model openai)" ;;
+        esac
+        [[ -n "$new_backend" ]] && changed=true
+        ;;
+      Model*)
         local new; new="$(_tui_input "AI model" "$model")"
         [[ -n "$new" ]] && { model="$new"; changed=true; }
         ;;
-      AI\ endpoint*)
+      Endpoint*)
         local new; new="$(_tui_input "API endpoint" "$api")"
         [[ -n "$new" ]] && { api="$new"; changed=true; }
+        ;;
+      API\ key*)
+        local new_key
+        if command -v gum &>/dev/null; then
+          new_key="$(gum input --password --placeholder "Paste API key" --prompt "API key: ")"
+        else
+          read -rsp "  API key: " new_key; echo
+        fi
+        [[ -n "$new_key" ]] && { api_key="$new_key"; changed=true; }
         ;;
       View*)
         echo
@@ -1468,8 +1512,15 @@ cmd_config() {
         echo
         ;;
       Save*)
-        printf 'LOL_CLANKERS_MODEL=%s\nLOL_CLANKERS_API=%s\n' \
-          "$model" "$api" > "$cfg"
+        {
+          echo "# lol configuration — keep this file private if it contains API keys"
+          echo "LOL_CLANKERS_BACKEND=${backend}"
+          echo "LOL_CLANKERS_MODEL=${model}"
+          [[ "$backend" == "ollama" || "$backend" == "openai" ]] && \
+            echo "LOL_CLANKERS_API=${api}"
+          [[ -n "$api_key" ]] && echo "LOL_CLANKERS_API_KEY=${api_key}"
+        } > "$cfg"
+        chmod 600 "$cfg"
         ok "Saved: $cfg"
         break
         ;;
