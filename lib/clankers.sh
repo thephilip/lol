@@ -202,6 +202,45 @@ clankers_test() {
   esac
 }
 
+# ── Model listing ─────────────────────────────────────────────────────────
+# _clankers_list_models <backend> <api> <api_key>
+#   Prints available model IDs on stdout, one per line.
+#   Returns 1 (prints nothing) if the list cannot be fetched.
+_clankers_list_models() {
+  local backend="$1" api="$2" api_key="$3"
+
+  case "$backend" in
+    ollama)
+      curl -sf "${api:-http://localhost:11434}/api/tags" 2>/dev/null \
+        | jq -r '.models[].name' 2>/dev/null | sort
+      ;;
+    claude)
+      [[ -z "$api_key" ]] && return 1
+      curl -sf "https://api.anthropic.com/v1/models" \
+        -H "x-api-key: ${api_key}" \
+        -H "anthropic-version: 2023-06-01" 2>/dev/null \
+        | jq -r '.data[].id' 2>/dev/null | sort
+      ;;
+    vertex)
+      # Vertex AI has no publisher-model listing API; emit known Claude IDs.
+      printf '%s\n' \
+        "claude-opus-4@20250514" \
+        "claude-sonnet-4-5@20251101" \
+        "claude-haiku-4-5@20251001" \
+        "claude-3-5-sonnet-v2@20241022" \
+        "claude-3-5-haiku@20241022" \
+        "claude-3-opus@20240229"
+      ;;
+    openai)
+      [[ -z "$api_key" ]] && return 1
+      local base="${api:-https://api.openai.com}"
+      curl -sf "${base}/v1/models" \
+        -H "Authorization: Bearer ${api_key}" 2>/dev/null \
+        | jq -r '.data[].id' 2>/dev/null | sort
+      ;;
+  esac
+}
+
 # ── Dependency checks ──────────────────────────────────────────────────────
 clankers_check_deps() {
   local model="$1"

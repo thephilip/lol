@@ -1540,8 +1540,23 @@ cmd_config() {
         [[ -n "$new_backend" ]] && changed=true
         ;;
       Model*)
-        local new; new="$(_tui_input "AI model" "$model")"
-        [[ -n "$new" ]] && { model="$new"; changed=true; }
+        # Fetch available models for the current backend (silent on failure)
+        local -a _models=()
+        while IFS= read -r _m; do
+          [[ -n "$_m" ]] && _models+=("$_m")
+        done < <(_clankers_list_models "$backend" "$api" "$api_key" 2>/dev/null)
+
+        local picked=""
+        if [[ ${#_models[@]} -gt 0 ]]; then
+          picked="$(_tui_choose "Select a model:" "${_models[@]}" "Enter manually")"
+        fi
+
+        if [[ "$picked" == "Enter manually" || -z "$picked" ]]; then
+          local new; new="$(_tui_input "AI model" "$model")"
+          [[ -n "$new" ]] && { model="$new"; changed=true; }
+        elif [[ -n "$picked" ]]; then
+          model="$picked"; changed=true
+        fi
         ;;
       Endpoint*)
         local new; new="$(_tui_input "API endpoint" "$api")"
