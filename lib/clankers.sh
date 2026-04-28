@@ -7,8 +7,8 @@ LOL_CLANKERS_BACKEND="${LOL_CLANKERS_BACKEND:-ollama}"
 LOL_CLANKERS_MODEL="${LOL_CLANKERS_MODEL:-gemma2:2b}"
 LOL_CLANKERS_API="${LOL_CLANKERS_API:-http://localhost:11434}"
 LOL_CLANKERS_API_KEY="${LOL_CLANKERS_API_KEY:-}"
-LOL_VERTEX_PROJECT="${LOL_VERTEX_PROJECT:-}"
-LOL_VERTEX_REGION="${LOL_VERTEX_REGION:-us-east5}"
+LOL_VERTEX_PROJECT="${LOL_VERTEX_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}"
+LOL_VERTEX_REGION="${LOL_VERTEX_REGION:-${ANTHROPIC_VERTEX_REGION:-us-east5}}"
 _CLANKERS_MAX_CHARS=18000   # context budget (leaves room for prompt overhead + response)
 
 # ── Namespace inference ────────────────────────────────────────────────────
@@ -227,10 +227,11 @@ _clankers_list_models() {
       # For the current list, check the Vertex AI Model Garden:
       #   https://console.cloud.google.com/vertex-ai/model-garden
       printf '%s\n' \
+        "claude-sonnet-4-6" \
+        "claude-sonnet-4-5" \
         "claude-3-5-sonnet-v2@20241022" \
         "claude-3-5-haiku@20241022" \
         "claude-3-opus@20240229" \
-        "claude-3-sonnet@20240229" \
         "claude-3-haiku@20240307"
       ;;
     openai)

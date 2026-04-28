@@ -1466,8 +1466,8 @@ cmd_config() {
   local model="${LOL_CLANKERS_MODEL:-gemma2:2b}"
   local api="${LOL_CLANKERS_API:-http://localhost:11434}"
   local api_key="${LOL_CLANKERS_API_KEY:-}"
-  local vertex_project="${LOL_VERTEX_PROJECT:-}"
-  local vertex_region="${LOL_VERTEX_REGION:-us-east5}"
+  local vertex_project="${LOL_VERTEX_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}"
+  local vertex_region="${LOL_VERTEX_REGION:-${ANTHROPIC_VERTEX_REGION:-us-east5}}"
   local changed=false
 
   # Default models per backend (suggested when switching)
