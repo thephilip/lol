@@ -141,16 +141,20 @@ _tui_input() {
 
 # _tui_choose <header> <option>...
 #   Prints the selected option on stdout.
+#   Display output goes to stderr so the list is visible when called inside $().
 _tui_choose() {
   local header="$1"; shift
   if command -v gum &>/dev/null; then
     gum choose --header "$header" "$@"
   else
+    printf "  %s\n" "$header" >&2
+    echo >&2
     local _i=1
     for _opt in "$@"; do
-      printf "  [%d] %s\n" "$_i" "$_opt"
+      printf "  [%d] %s\n" "$_i" "$_opt" >&2
       ((_i++)) || true
     done
+    echo >&2
     local _r; read -rp "  Choice [1]: " _r
     _r="${_r:-1}"
     local _arr=("$@")
@@ -161,6 +165,7 @@ _tui_choose() {
 # _tui_filter [placeholder]
 #   Reads lines from stdin; prints the selected line on stdout.
 #   Falls back to fzf, then to a plain numbered list.
+#   Display output goes to stderr so the list is visible when called inside $().
 _tui_filter() {
   local placeholder="${1:-Type to filter...}"
   if command -v gum &>/dev/null; then
@@ -172,7 +177,7 @@ _tui_filter() {
     while IFS= read -r _line; do _items+=("$_line"); done
     local _i=1
     for _item in "${_items[@]}"; do
-      printf "  [%d] %s\n" "$_i" "$_item"
+      printf "  [%d] %s\n" "$_i" "$_item" >&2
       ((_i++)) || true
     done
     local _r; read -rp "  Choice: " _r
