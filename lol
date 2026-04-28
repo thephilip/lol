@@ -231,10 +231,19 @@ cmd_use() {
 
     $is_new && ok "Context created: $LOL_CTX_NAME" || ok "Context updated: $LOL_CTX_NAME"
   else
-    # Anonymous session — explicitly clear any active named context
-    clear_active_ctx
-    echo "$path" > "$LOL_CONTEXT_FILE"
-    ok "Anonymous session — no ledger will be kept"
+    local cur_ctx; cur_ctx="$(active_ctx)"
+    if [[ -n "$cur_ctx" ]]; then
+      # Active named context — attach the must-gather to it
+      ctx_set "$cur_ctx" "CURRENT_MG" "$path"
+      ctx_set "$cur_ctx" "UPDATED"    "$ts"
+      echo "${ts} ${path}" >> "$(ctx_hist "$cur_ctx")"
+      echo "$path" > "$LOL_CONTEXT_FILE"
+      ok "Must-gather set in context '${cur_ctx}'"
+    else
+      # No active context → anonymous session
+      echo "$path" > "$LOL_CONTEXT_FILE"
+      ok "Anonymous session — no ledger will be kept"
+    fi
   fi
 
   ok "Active must-gather: $path"
