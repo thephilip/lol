@@ -1496,7 +1496,8 @@ cmd_config() {
       openai) opts+=("Endpoint   → ${api}" "API key    → ${key_display}") ;;
       claude) opts+=("API key    → ${key_display}") ;;
       vertex) opts+=("GCP project → ${vertex_project:-(auto-detect)}"
-                     "GCP region  → ${vertex_region}") ;;
+                     "GCP region  → ${vertex_region}"
+                     "Model Garden (view available models in browser)") ;;
     esac
     opts+=("Test connection" "View config file" "Save and exit" "Exit without saving")
 
@@ -1565,6 +1566,15 @@ cmd_config() {
       GCP\ project*)
         local new; new="$(_tui_input "GCP project ID" "$vertex_project")"
         [[ -n "$new" ]] && { vertex_project="$new"; changed=true; }
+        ;;
+      Model\ Garden*)
+        info "Opening Vertex AI Model Garden..."
+        local url="https://console.cloud.google.com/vertex-ai/model-garden?project=${vertex_project}"
+        if command -v xdg-open &>/dev/null; then
+          xdg-open "$url" &>/dev/null &
+        else
+          info "Visit: $url"
+        fi
         ;;
       GCP\ region*)
         local new_region

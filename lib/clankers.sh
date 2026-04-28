@@ -222,14 +222,16 @@ _clankers_list_models() {
         | jq -r '.data[].id' 2>/dev/null | sort
       ;;
     vertex)
-      # Vertex AI has no publisher-model listing API; emit known Claude IDs.
+      # Vertex AI has no publisher-model listing API for Anthropic models.
+      # These are confirmed Claude-on-Vertex model IDs as of the last lol release.
+      # For the current list, check the Vertex AI Model Garden:
+      #   https://console.cloud.google.com/vertex-ai/model-garden
       printf '%s\n' \
-        "claude-opus-4@20250514" \
-        "claude-sonnet-4-5@20251101" \
-        "claude-haiku-4-5@20251001" \
         "claude-3-5-sonnet-v2@20241022" \
         "claude-3-5-haiku@20241022" \
-        "claude-3-opus@20240229"
+        "claude-3-opus@20240229" \
+        "claude-3-sonnet@20240229" \
+        "claude-3-haiku@20240307"
       ;;
     openai)
       [[ -z "$api_key" ]] && return 1
