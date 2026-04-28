@@ -164,6 +164,7 @@ The install script will:
 1. Clone the repo to `~/.local/share/lol/` (overridable via `$LOL_INSTALL_DIR`)
 2. Symlink `~/.local/bin/lol` → the clone (overridable via `$LOL_BIN_DIR`)
 3. Warn if `~/.local/bin` is not in your `$PATH`
+4. Offer to install zsh tab completions to a detected completions directory
 
 Because the install directory is a git clone, `lol upgrade` works out of the box.
 
@@ -205,11 +206,15 @@ This removes the symlink and optionally the install directory and context data.
 
 | Tool | Required | Purpose |
 |------|----------|---------|
-| [`omc`](https://github.com/gmeghnag/omc) | Yes | Must-gather parsing (all check and passthrough commands) |
-| [`ocm`](https://github.com/openshift-online/ocm-cli) | For `lol alerts` | Live cluster data via the OCM API |
-| `bash` ≥ 4.0 | Yes | Associative arrays, `[[ ]]`, etc. |
-| `jq` | For some checks | JSON parsing |
-| `gum` or `fzf` | No | Optional — richer TUI prompts |
+| [`omc`](https://github.com/gmeghnag/omc) | Yes | Must-gather parsing — all check and passthrough commands |
+| `bash` ≥ 4.0 | Yes | Core shell runtime |
+| `jq` | Yes | JSON parsing — checks, OCM commands, and AI features |
+| `curl` | Yes | AI backend communication (ollama, Claude, Vertex, OpenAI) |
+| [`ocm`](https://github.com/openshift-online/ocm-cli) | For OCM commands | `lol alerts`, `service-log`, `limited-support`, `cluster --cluster`, etc. |
+| [`gcloud`](https://cloud.google.com/sdk/docs/install) | For Vertex AI | Authentication for the Vertex AI backend (`lol config` → vertex) |
+| [`ollama`](https://ollama.ai) | For local AI | Local model inference — `lol ask`, `--with-clankers` with ollama backend |
+| `gum` | No | Enhanced TUI prompts — `lol config`, interactive confirmations |
+| `fzf` | No | Fuzzy context picker fallback when `gum` is not installed |
 
 ---
 
