@@ -8,6 +8,9 @@ must-gather, then query it like a live cluster.
 `-A`/`--all-namespaces`, `-n`/`--namespace`, `-o`/`--output` (json|yaml|wide|jsonpath|custom-columns),
 `-l`/`--selector` (label selector), `--sort-by`, `--show-labels`, `--no-headers`.
 **`--field-selector` is NOT supported** — use `grep` to filter output instead.
+**`omc adm` does NOT support `top`** — CPU/memory usage is unavailable from a must-gather.
+**`omc prometheus alertrule -o`** only accepts `json` or `yaml` (not `wide`).
+Always use `--sort-by=.lastTimestamp` with `omc get events` to get time-ordered output.
 
 ## Setup
 
@@ -43,7 +46,7 @@ omc get network cluster -o json
 omc get nodes                              # list all nodes with status/roles/age
 omc get nodes -o wide                      # includes IP, OS image, kernel, container runtime
 omc describe node <name>                   # full node detail: conditions, capacity, taints, events
-omc adm top nodes                          # CPU/memory usage snapshot
+# Note: omc adm does NOT support 'top' — CPU/memory usage data is not available via omc
 
 # Node conditions to check in describe output:
 #   MemoryPressure, DiskPressure, PIDPressure → should all be False
@@ -84,10 +87,10 @@ omc get clusteroperator <name> -o yaml     # full status with conditions and mes
 ## Events
 
 ```bash
-omc get events -n <namespace>              # namespace events sorted by time
-omc get events -A                          # all namespaces
-omc get events -n <namespace> | grep BackOff     # omc has no --field-selector; use grep
-omc get events -n <namespace> | grep Warning
+omc get events -n <namespace> --sort-by=.lastTimestamp    # events sorted by time
+omc get events -A --sort-by=.lastTimestamp                 # all namespaces
+omc get events -n <namespace> --sort-by=.lastTimestamp | grep BackOff   # filter with grep (no --field-selector)
+omc get events -n <namespace> --sort-by=.lastTimestamp | grep Warning
 ```
 
 ---
@@ -112,7 +115,7 @@ omc get etcd cluster -o yaml               # etcd operator status and conditions
 ```bash
 omc prometheus alertrule -s firing,pending         # only active alerts (default for lol alerts)
 omc prometheus alertrule                           # all rules including inactive
-omc prometheus alertrule -s firing,pending -o wide # includes labels and annotations
+omc prometheus alertrule -s firing,pending -o json # detail view (-o accepts json|yaml only, not wide)
 omc prometheus alertgroup                          # grouped view
 
 # Alert state: firing > pending > inactive
@@ -171,7 +174,7 @@ omc get secret <name> -n <namespace> -o yaml       # values are base64 encoded
 omc get clusteroperator <name> -o yaml             # read .status.conditions[].message
 omc get pods -n openshift-<name>                   # find crashed/pending pods
 omc logs <pod> -n openshift-<name> --previous      # crash logs
-omc get events -n openshift-<name>                 # recent events
+omc get events -n openshift-<name> --sort-by=.lastTimestamp   # recent events
 ```
 
 ### Node NotReady
@@ -192,5 +195,5 @@ omc logs <etcd-pod> -n openshift-etcd -c etcd | tail -200
 ```bash
 omc describe pod <pod> -n <ns>                     # check Exit Code and Last State
 omc logs <pod> -n <ns> --previous                  # logs from before the crash
-omc get events -n <ns> | grep <pod>              # omc has no --field-selector; use grep
+omc get events -n <ns> --sort-by=.lastTimestamp | grep <pod>   # no --field-selector; use grep
 ```
