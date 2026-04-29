@@ -4,6 +4,11 @@
 against a static snapshot. Always run `omc use <path>` first to load the
 must-gather, then query it like a live cluster.
 
+**Important — `omc` is not `oc`.** Supported flags for `omc get` are:
+`-A`/`--all-namespaces`, `-n`/`--namespace`, `-o`/`--output` (json|yaml|wide|jsonpath|custom-columns),
+`-l`/`--selector` (label selector), `--sort-by`, `--show-labels`, `--no-headers`.
+**`--field-selector` is NOT supported** — use `grep` to filter output instead.
+
 ## Setup
 
 ```bash
@@ -52,7 +57,7 @@ omc adm top nodes                          # CPU/memory usage snapshot
 ```bash
 omc get pods -n <namespace>                # list pods in namespace
 omc get pods -A                            # all namespaces
-omc get pods -A --field-selector status.phase=Failed
+omc get pods -A | grep -v Running          # find non-Running pods (omc has no --field-selector)
 omc get pods -n <namespace> -o wide        # includes node placement and IPs
 
 omc logs <pod> -n <namespace>              # current container logs
@@ -81,8 +86,8 @@ omc get clusteroperator <name> -o yaml     # full status with conditions and mes
 ```bash
 omc get events -n <namespace>              # namespace events sorted by time
 omc get events -A                          # all namespaces
-omc get events -n <namespace> --field-selector reason=BackOff
-omc get events -n <namespace> --field-selector type=Warning
+omc get events -n <namespace> | grep BackOff     # omc has no --field-selector; use grep
+omc get events -n <namespace> | grep Warning
 ```
 
 ---
@@ -172,7 +177,7 @@ omc get events -n openshift-<name>                 # recent events
 ### Node NotReady
 ```bash
 omc describe node <name>                           # check Conditions and Events sections
-omc get pods -A --field-selector spec.nodeName=<name>   # pods on this node
+omc get pods -A -o wide | grep <name>                    # pods on this node (omc has no --field-selector)
 omc logs <kubelet-pod> -n openshift-node --previous
 ```
 
@@ -187,5 +192,5 @@ omc logs <etcd-pod> -n openshift-etcd -c etcd | tail -200
 ```bash
 omc describe pod <pod> -n <ns>                     # check Exit Code and Last State
 omc logs <pod> -n <ns> --previous                  # logs from before the crash
-omc get events -n <ns> --field-selector involvedObject.name=<pod>
+omc get events -n <ns> | grep <pod>              # omc has no --field-selector; use grep
 ```
