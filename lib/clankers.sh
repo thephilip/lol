@@ -524,6 +524,171 @@ _clankers_send() {
   esac
 }
 
+# ── Tool-use loop (Claude and Vertex only) ────────────────────────────────
+
+_CLANKERS_TOOLS='[{
+  "name": "run_omc",
+  "description": "Run an omc command against the active must-gather snapshot and return its output. The must-gather is a read-only offline archive — all commands are safe. Use this to investigate cluster state: pod status, logs, operator conditions, events, prometheus alerts, etc. Prefer running commands over suggesting them.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Everything after \"omc\", e.g. \"get pods -n openshift-etcd -o wide\" or \"logs pod-name -n openshift-etcd -c etcd --tail 50\""
+      }
+    },
+    "required": ["command"]
+  }
+}]'
+
+# Execute a single tool call. Prints result to stdout.
+_clankers_run_tool() {
+  local name="$1" input_json="$2"
+  case "$name" in
+    run_omc)
+      local cmd_str; cmd_str="$(printf '%s' "$input_json" | jq -r '.command // empty' 2>/dev/null)"
+      [[ -z "$cmd_str" ]] && { printf '(error: empty command)'; return; }
+      local -a args; read -ra args <<< "$cmd_str"
+      local out rc=0
+      out="$(omc "${args[@]}" 2>&1)" || rc=$?
+      [[ -z "$out" ]] && out="(no output)"
+      [[ ${#out} -gt 6000 ]] && out="${out:0:6000}"$'\n''...(truncated to 6000 chars)'
+      printf '%s' "$out"
+      ;;
+    *) printf '(unknown tool: %s)' "$name" ;;
+  esac
+}
+
+# _clankers_parse_and_execute msgs_file [curl-args...]
+# Streams one API response: prints text to stdout, accumulates tool calls,
+# executes them, appends all turns to msgs_file.
+# Returns 0 when stop_reason=end_turn, 1 when tools were executed (caller should loop).
+_clankers_parse_and_execute() {
+  local msgs_file="$1"; shift
+
+  local in_tool=false stop_reason=""
+  local cur_id="" cur_name="" cur_input="" cur_text=""
+  local asst_content='[]'
+  local -a tool_queue=()
+
+  while IFS= read -r line; do
+    [[ "$line" == data:* ]] || continue
+    local j="${line#data: }"
+    local t; t="$(printf '%s' "$j" | jq -r '.type // empty' 2>/dev/null)"
+    case "$t" in
+      content_block_start)
+        local bt; bt="$(printf '%s' "$j" | jq -r '.content_block.type // empty' 2>/dev/null)"
+        if [[ "$bt" == tool_use ]]; then
+          in_tool=true
+          cur_id="$(  printf '%s' "$j" | jq -r '.content_block.id'   2>/dev/null)"
+          cur_name="$(printf '%s' "$j" | jq -r '.content_block.name' 2>/dev/null)"
+          cur_input=""
+        else
+          in_tool=false; cur_text=""
+        fi
+        ;;
+      content_block_delta)
+        if $in_tool; then
+          cur_input+="$(printf '%s' "$j" | jq -r '.delta.partial_json // empty' 2>/dev/null)"
+        else
+          local tok; tok="$(printf '%s' "$j" | jq -r '.delta.text // empty' 2>/dev/null)"
+          [[ -n "$tok" ]] && { printf '%s' "$tok"; cur_text+="$tok"; }
+        fi
+        ;;
+      content_block_stop)
+        if $in_tool; then
+          tool_queue+=("${cur_id}|${cur_name}|${cur_input}")
+          asst_content="$(printf '%s' "$asst_content" | jq \
+            --arg id "$cur_id" --arg nm "$cur_name" \
+            --argjson inp "${cur_input:-{}}" \
+            '. + [{"type":"tool_use","id":$id,"name":$nm,"input":$inp}]')"
+          in_tool=false
+        elif [[ -n "$cur_text" ]]; then
+          asst_content="$(printf '%s' "$asst_content" | jq \
+            --arg tx "$cur_text" '. + [{"type":"text","text":$tx}]')"
+          cur_text=""
+        fi
+        ;;
+      message_delta)
+        stop_reason="$(printf '%s' "$j" | jq -r '.delta.stop_reason // empty' 2>/dev/null)"
+        ;;
+    esac
+  done < <("$@")
+
+  # Commit assistant turn
+  jq --argjson c "$asst_content" '. + [{"role":"assistant","content":$c}]' \
+    "$msgs_file" > "${msgs_file}.tmp" && mv "${msgs_file}.tmp" "$msgs_file"
+
+  [[ "$stop_reason" != "tool_use" || ${#tool_queue[@]} -eq 0 ]] && return 0
+
+  # Execute tools and print output inline
+  local results='[]'
+  for entry in "${tool_queue[@]}"; do
+    local tid="${entry%%|*}" rest="${entry#*|}"
+    local tname="${rest%%|*}" tinput="${rest#*|}"
+    local cmd_display; cmd_display="$(printf '%s' "$tinput" | jq -r '.command // ""' 2>/dev/null)"
+    printf '\n%s[running: omc %s]%s\n' "$DIM" "$cmd_display" "$RESET"
+    local out; out="$(_clankers_run_tool "$tname" "$tinput")"
+    printf '%s\n' "$out"
+    results="$(printf '%s' "$results" | jq \
+      --arg id "$tid" --arg o "$out" \
+      '. + [{"type":"tool_result","tool_use_id":$id,"content":$o}]')"
+  done
+
+  # Commit tool results as next user turn
+  jq --argjson c "$results" '. + [{"role":"user","content":$c}]' \
+    "$msgs_file" > "${msgs_file}.tmp" && mv "${msgs_file}.tmp" "$msgs_file"
+
+  echo  # blank line before the next response segment
+  return 1
+}
+
+# Tool-use chat for Claude API. Loops until end_turn.
+_clankers_chat_claude_tools() {
+  local model="$1" system="$2" msgs_file="$3"
+  until
+    local payload
+    payload="$(jq -n \
+      --arg m "$model" --arg s "$system" \
+      --argjson msgs "$(cat "$msgs_file")" \
+      --argjson tools "$_CLANKERS_TOOLS" \
+      '{model:$m,max_tokens:4096,
+        system:[{"type":"text","text":$s,"cache_control":{"type":"ephemeral"}}],
+        messages:$msgs,tools:$tools,stream:true}')"
+    _clankers_parse_and_execute "$msgs_file" \
+      curl -sN "https://api.anthropic.com/v1/messages" \
+        -H "x-api-key: ${LOL_CLANKERS_API_KEY}" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "anthropic-beta: prompt-caching-2024-07-31" \
+        -H "content-type: application/json" \
+        -d "$payload"
+  do :; done
+}
+
+# Tool-use chat for Vertex AI. Loops until end_turn.
+_clankers_chat_vertex_tools() {
+  local model="$1" system="$2" msgs_file="$3"
+  local proj="${LOL_VERTEX_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+  local region="${LOL_VERTEX_REGION:-us-east5}"
+  until
+    local token
+    token="$(gcloud auth application-default print-access-token 2>/dev/null)" || return 1
+    local endpoint="https://${region}-aiplatform.googleapis.com/v1/projects/${proj}/locations/${region}/publishers/anthropic/models/${model}:streamRawPredict"
+    local payload
+    payload="$(jq -n \
+      --arg s "$system" \
+      --argjson msgs "$(cat "$msgs_file")" \
+      --argjson tools "$_CLANKERS_TOOLS" \
+      '{"anthropic_version":"vertex-2023-10-16","max_tokens":4096,
+        "system":$s,"messages":$msgs,"tools":$tools,"stream":true}')"
+    _clankers_parse_and_execute "$msgs_file" \
+      curl -sN "$endpoint" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$payload"
+  do :; done
+}
+
 # ── Main entry point ───────────────────────────────────────────────────────
 clankers_run() {
   local query="$1"
@@ -804,7 +969,11 @@ clankers_ask() {
   [[ -n "$cluster_context" ]] && \
     system_prompt+="$(printf '## Current session context\n%b' "$cluster_context")"$'\n\n---\n\n'
 
-  system_prompt+="You are an expert OpenShift and Red Hat support engineer. Answer concisely and technically. When recommending investigation steps, provide specific omc or ocm commands and explain what to look for in the output."
+  if [[ "$backend" == "claude" || "$backend" == "vertex" ]]; then
+    system_prompt+="You are an expert OpenShift and Red Hat support engineer. You have access to a run_omc tool — use it proactively to run omc commands against the must-gather and incorporate the real output into your analysis. Don't just suggest commands; run them and summarise what you find. Answer concisely and technically."
+  else
+    system_prompt+="You are an expert OpenShift and Red Hat support engineer. Answer concisely and technically. When recommending investigation steps, provide specific omc or ocm commands and explain what to look for in the output."
+  fi
 
   # ── Session header ──────────────────────────────────────────────────────
   section "lol ask (${backend} · ${model})"
@@ -824,7 +993,16 @@ clankers_ask() {
   fi
 
   # ── Conversation loop ───────────────────────────────────────────────────
+  # Claude and Vertex use file-based message history to support content arrays
+  # produced by the tool-use loop. Ollama and OpenAI use a simple string variable.
+  local use_tools=false msgs_file=""
   local messages='[]'
+  if [[ "$backend" == "claude" || "$backend" == "vertex" ]]; then
+    use_tools=true
+    msgs_file="$(mktemp)"
+    printf '[]' > "$msgs_file"
+  fi
+
   local turn=0
 
   while true; do
@@ -846,28 +1024,42 @@ clankers_ask() {
     fi
 
     # Add user message to history
-    messages="$(printf '%s' "$messages" | \
-      jq --arg c "$user_input" '. + [{"role":"user","content":$c}]')"
+    if $use_tools; then
+      jq --arg c "$user_input" '. + [{"role":"user","content":$c}]' \
+        "$msgs_file" > "${msgs_file}.tmp" && mv "${msgs_file}.tmp" "$msgs_file"
+    else
+      messages="$(printf '%s' "$messages" | \
+        jq --arg c "$user_input" '. + [{"role":"user","content":$c}]')"
+    fi
 
-    # Stream response, capturing to temp file for history
+    # Stream response, capturing text to temp file for logging
     echo
     printf "${BOLD}${CYAN}┌─ Response ─────────────────────────────────────────────────────${RESET}\n"
     echo
 
     local resp_file; resp_file="$(mktemp)"
-    _clankers_chat "$model" "$system_prompt" "$messages" | tee "$resp_file"
+    if $use_tools; then
+      "_clankers_chat_${backend}_tools" "$model" "$system_prompt" "$msgs_file" \
+        | tee "$resp_file"
+    else
+      _clankers_chat "$model" "$system_prompt" "$messages" | tee "$resp_file"
+    fi
     echo
     printf "${BOLD}${CYAN}└────────────────────────────────────────────────────────────────${RESET}\n"
 
-    # Capture clean response for history and logging (strip ANSI + stats line)
+    # Capture clean text for logging (strip ANSI, tool output lines, stats)
     local assistant_response
     assistant_response="$(sed 's/\x1b\[[0-9;]*[mK]//g' "$resp_file" \
-      | grep -v " output tokens" | grep -v "tok/s" | sed '/^[[:space:]]*$/d')"
+      | grep -v " output tokens" | grep -v "tok/s" \
+      | grep -v '^\[running:' | sed '/^[[:space:]]*$/d')"
     rm -f "$resp_file"
 
-    # Add assistant response to history
-    messages="$(printf '%s' "$messages" | \
-      jq --arg c "$assistant_response" '. + [{"role":"assistant","content":$c}]')"
+    # Non-tool backends: add assistant response to history manually
+    if ! $use_tools; then
+      messages="$(printf '%s' "$messages" | \
+        jq --arg c "$assistant_response" '. + [{"role":"assistant","content":$c}]')"
+    fi
+    # Tool backends: msgs_file already updated by _clankers_chat_*_tools
 
     # Log this turn to commands.log
     if [[ -n "$cmd_log" ]]; then
@@ -883,6 +1075,7 @@ clankers_ask() {
     [[ -n "$question" ]] && break
   done
 
+  [[ -n "$msgs_file" ]] && rm -f "$msgs_file" "${msgs_file}.tmp"
   [[ -n "$cmd_log" ]] && \
     printf '[%s] $ lol ask session end (%d turn(s))\n\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%S)" "$turn" >> "$cmd_log"
