@@ -528,13 +528,13 @@ _clankers_send() {
 
 _CLANKERS_TOOLS='[{
   "name": "run_omc",
-  "description": "Run an omc command against the active must-gather snapshot and return its output. The must-gather is a read-only offline archive — all commands are safe. Use this to investigate cluster state: pod status, logs, operator conditions, events, prometheus alerts, etc. Prefer running commands over suggesting them.",
+  "description": "Run an omc command against the active must-gather snapshot and return its output. The must-gather is a read-only offline archive — all commands are safe. Use this to investigate cluster state: pod status, logs, operator conditions, events, prometheus alerts, etc. Prefer running commands over suggesting them. Pipes and grep are supported, e.g. \"get pods -A | grep -v Running\".",
   "input_schema": {
     "type": "object",
     "properties": {
       "command": {
         "type": "string",
-        "description": "Everything after \"omc\", e.g. \"get pods -n openshift-etcd -o wide\" or \"logs pod-name -n openshift-etcd -c etcd --tail 50\""
+        "description": "Everything after \"omc\". Pipes are supported, e.g. \"get pods -A | grep -v Running\" or \"get events -n openshift-etcd --sort-by=.lastTimestamp | tail -20\""
       }
     },
     "required": ["command"]
@@ -548,9 +548,10 @@ _clankers_run_tool() {
     run_omc)
       local cmd_str; cmd_str="$(printf '%s' "$input_json" | jq -r '.command // empty' 2>/dev/null)"
       [[ -z "$cmd_str" ]] && { printf '(error: empty command)'; return; }
-      local -a args; read -ra args <<< "$cmd_str"
       local out rc=0
-      out="$(omc "${args[@]}" 2>&1)" || rc=$?
+      # Run via bash so the AI can use pipes and grep after omc output.
+      # omc must be the first command — enforced by the tool description.
+      out="$(bash -c "omc $cmd_str" 2>&1)" || rc=$?
       [[ -z "$out" ]] && out="(no output)"
       [[ ${#out} -gt 6000 ]] && out="${out:0:6000}"$'\n''...(truncated to 6000 chars)'
       printf '%s' "$out"
@@ -598,14 +599,24 @@ _clankers_parse_and_execute() {
       content_block_stop)
         if $in_tool; then
           tool_queue+=("${cur_id}|${cur_name}|${cur_input}")
-          asst_content="$(printf '%s' "$asst_content" | jq \
+          # Validate cur_input is parseable JSON before using --argjson.
+          # If not (e.g. truncated stream), fall back to wrapping as raw string.
+          local inp_json="${cur_input:-{}}"
+          if ! printf '%s' "$inp_json" | jq -e . &>/dev/null 2>&1; then
+            inp_json="$(jq -n --arg raw "$cur_input" '{"command":$raw}')"
+          fi
+          local new_ac
+          new_ac="$(printf '%s' "${asst_content:-[]}" | jq \
             --arg id "$cur_id" --arg nm "$cur_name" \
-            --argjson inp "${cur_input:-{}}" \
-            '. + [{"type":"tool_use","id":$id,"name":$nm,"input":$inp}]')"
+            --argjson inp "$inp_json" \
+            '. + [{"type":"tool_use","id":$id,"name":$nm,"input":$inp}]' 2>/dev/null)"
+          [[ -n "$new_ac" ]] && asst_content="$new_ac"
           in_tool=false
         elif [[ -n "$cur_text" ]]; then
-          asst_content="$(printf '%s' "$asst_content" | jq \
-            --arg tx "$cur_text" '. + [{"type":"text","text":$tx}]')"
+          local new_ac
+          new_ac="$(printf '%s' "${asst_content:-[]}" | jq \
+            --arg tx "$cur_text" '. + [{"type":"text","text":$tx}]' 2>/dev/null)"
+          [[ -n "$new_ac" ]] && asst_content="$new_ac"
           cur_text=""
         fi
         ;;
@@ -627,7 +638,7 @@ _clankers_parse_and_execute() {
     local tid="${entry%%|*}" rest="${entry#*|}"
     local tname="${rest%%|*}" tinput="${rest#*|}"
     local cmd_display; cmd_display="$(printf '%s' "$tinput" | jq -r '.command // ""' 2>/dev/null)"
-    printf '\n%s[running: omc %s]%s\n' "$DIM" "$cmd_display" "$RESET"
+    printf "\n${DIM}[running: omc %s]${RESET}\n" "$cmd_display"
     local out; out="$(_clankers_run_tool "$tname" "$tinput")"
     printf '%s\n' "$out"
     results="$(printf '%s' "$results" | jq \
