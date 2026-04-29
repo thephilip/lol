@@ -80,6 +80,18 @@ _lol() {
           _arguments \
             '(-C --cluster)'{-C,--cluster}'[set active cluster via OCM]:cluster ID or name'
           ;;
+        findings)
+          local -a findings_subcmds
+          findings_subcmds=(
+            'show:print the findings log for the active context'
+            'clear:remove the findings log for the active context'
+            'edit:open the findings log in \$EDITOR'
+          )
+          _arguments '1: :->findings_sub'
+          case $state in
+            findings_sub) _describe 'subcommand' findings_subcmds ;;
+          esac
+          ;;
         ask)
           _arguments \
             '--no-log[do not record this session to the context ledger]' \
@@ -98,6 +110,7 @@ _lol_commands() {
     'check:run checks against the active must-gather'
     'cluster:show cluster summary (version, platform, network)'
     'context:manage named contexts (list / resume / show)'
+    'findings:view or manage the AI investigation findings log'
     'ready-up:generate an AI-ready handoff document'
     'list:list available checks'
     'status:show active session and context info'
