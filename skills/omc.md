@@ -53,6 +53,75 @@ omc describe node <name>                   # full node detail: conditions, capac
 #   Ready → must be True; False means the node is not schedulable
 ```
 
+### Node capacity, allocatable, and SKU — JSON analysis
+
+`omc get` does not support `--field-selector` or live metrics. For per-node
+capacity/utilisation analysis, use `-o json` and pipe to `python3` or `jq`.
+The `node.kubernetes.io/instance-type` label carries the cloud VM SKU.
+`status.capacity` is the raw node total; `status.allocatable` is what
+Kubernetes can schedule onto (capacity minus OS/kubelet overhead).
+
+```bash
+omc get nodes -o json | python3 -c "
+import json, sys
+nodes = json.load(sys.stdin)['items']
+print(f'{'Node':<55} {'Role':<8} {'SKU':<22} {'CPU alloc':<12} {'Mem alloc GiB':<16} {'MemPressure'}')
+print('-'*140)
+for n in nodes:
+    labels = n['metadata'].get('labels', {})
+    role = ('master' if 'node-role.kubernetes.io/master' in labels or
+            'node-role.kubernetes.io/control-plane' in labels
+            else 'infra' if 'node-role.kubernetes.io/infra' in labels
+            else 'worker')
+    sku  = labels.get('node.kubernetes.io/instance-type', 'unknown')
+    alloc = n['status'].get('allocatable', {})
+    mem_ki = int(alloc.get('memory', '0Ki').replace('Ki',''))
+    mp = next((c['status'] for c in n['status'].get('conditions',[])
+               if c['type']=='MemoryPressure'), '?')
+    print(f'{n[\"metadata\"][\"name\"]:<55} {role:<8} {sku:<22} {alloc.get(\"cpu\",\"?\"):<12} {mem_ki/1024/1024:<16.1f} {mp}')
+"
+```
+
+### Pod resource requests per node
+
+`omc adm top` is not available. Aggregate pod `requests` from JSON instead.
+Memory values in pod specs use mixed suffixes: `Ki`, `Mi`, `Gi` (binary) and
+`K`, `M`, `G` (decimal) and bare bytes — handle all of them:
+
+```bash
+omc get pods -A -o json | python3 -c "
+import json, sys
+from collections import defaultdict
+
+def parse_cpu(s):
+    if not s: return 0
+    return int(s[:-1]) if s.endswith('m') else int(float(s)*1000)
+
+def parse_mem(s):
+    if not s: return 0
+    s = str(s)
+    for suf, mul in [('Ki',1024),('Mi',1024**2),('Gi',1024**3),
+                     ('K',1000),('M',1000**2),('G',1000**3)]:
+        if s.endswith(suf): return int(s[:-len(suf)])*mul
+    try: return int(s)
+    except: return 0
+
+req = defaultdict(lambda: {'cpu':0,'mem':0})
+for pod in json.load(sys.stdin)['items']:
+    node = pod.get('spec',{}).get('nodeName')
+    if not node: continue
+    for c in pod.get('spec',{}).get('containers',[]):
+        r = c.get('resources',{}).get('requests',{})
+        req[node]['cpu'] += parse_cpu(r.get('cpu'))
+        req[node]['mem'] += parse_mem(r.get('memory'))
+
+print(f'{'Node':<55} {'CPU req (m)':<14} {'Mem req GiB'}')
+print('-'*85)
+for node, v in sorted(req.items()):
+    print(f'{node:<55} {v[\"cpu\"]:<14} {v[\"mem\"]/1024**3:.2f}')
+"
+```
+
 ---
 
 ## Pods and workloads

@@ -548,8 +548,14 @@ _clankers_run_tool() {
     run_omc)
       local cmd_str; cmd_str="$(printf '%s' "$input_json" | jq -r '.command // empty' 2>/dev/null)"
       [[ -z "$cmd_str" ]] && { printf '(error: empty command)'; return; }
+      # Guard: if the model accidentally passed a JSON object as the command
+      # value (double-encoding), unwrap one level.
+      if [[ "$cmd_str" == "{"* ]]; then
+        local _unwrapped; _unwrapped="$(printf '%s' "$cmd_str" | jq -r '.command // empty' 2>/dev/null)"
+        [[ -n "$_unwrapped" ]] && cmd_str="$_unwrapped"
+      fi
       local out rc=0
-      # Run via bash so the AI can use pipes and grep after omc output.
+      # Run via bash so the AI can use pipes, grep, awk, python3, etc.
       # omc must be the first command — enforced by the tool description.
       out="$(bash -c "omc $cmd_str" 2>&1)" || rc=$?
       [[ -z "$out" ]] && out="(no output)"
