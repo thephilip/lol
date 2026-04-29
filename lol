@@ -33,6 +33,7 @@ Commands:
   check [name,...]        Run checks (no args = all; comma-separated names for specific)
   cluster [-C <id>]       Show cluster summary; -C/--cluster sets cluster via OCM
   context <sub>           Manage named contexts (new / list / resume / show / rm)
+  findings [show|clear|edit]  View or manage the AI investigation findings log
   ready-up                Generate an AI-ready handoff from the active context
   config                  Interactive configuration menu (AI model, endpoint)
   list                    List available checks
@@ -102,10 +103,11 @@ EOF
 }
 
 # ── Context storage helpers ────────────────────────────────────────────────
-ctx_dir()  { echo "$LOL_CONTEXTS_DIR/$1"; }
-ctx_meta() { echo "$LOL_CONTEXTS_DIR/$1/meta.env"; }
-ctx_runs() { echo "$LOL_CONTEXTS_DIR/$1/runs"; }
-ctx_hist() { echo "$LOL_CONTEXTS_DIR/$1/mg-history.log"; }
+ctx_dir()      { echo "$LOL_CONTEXTS_DIR/$1"; }
+ctx_meta()     { echo "$LOL_CONTEXTS_DIR/$1/meta.env"; }
+ctx_runs()     { echo "$LOL_CONTEXTS_DIR/$1/runs"; }
+ctx_hist()     { echo "$LOL_CONTEXTS_DIR/$1/mg-history.log"; }
+ctx_findings() { echo "$LOL_CONTEXTS_DIR/$1/findings.md"; }
 
 ctx_exists() { [[ -f "$(ctx_meta "$1")" ]]; }
 
@@ -729,6 +731,16 @@ cmd_ready_up() {
     local cmd_content; cmd_content="$(cat "$cmd_log")"
     $no_redact && emit "$cmd_content" || emit "$(scrub_pii "$cmd_content")"
     emit '```'
+    emit ""
+  fi
+
+  # AI investigation findings (written by lol ask tool-use loop)
+  local findings_file; findings_file="$(ctx_findings "$ctx")"
+  if [[ -f "$findings_file" ]]; then
+    emit "## AI Investigation Findings"
+    emit ""
+    local findings_content; findings_content="$(cat "$findings_file")"
+    $no_redact && emit "$findings_content" || emit "$(scrub_pii "$findings_content")"
     emit ""
   fi
 
@@ -1502,6 +1514,49 @@ cmd_version() {
   echo
 }
 
+# ── cmd: findings ─────────────────────────────────────────────────────────
+cmd_findings() {
+  local subcmd="${1:-show}"
+
+  local ctx; ctx="$(active_ctx)"
+  if [[ -z "$ctx" ]]; then
+    err "findings requires a named context — no active context found."
+    info "Run: lol context resume <name>"
+    exit 1
+  fi
+
+  local ff; ff="$(ctx_findings "$ctx")"
+
+  case "$subcmd" in
+    show|"")
+      if [[ ! -f "$ff" ]]; then
+        info "No findings recorded yet for context '${ctx}'"
+        info "Start a lol ask session (Claude or Vertex) to begin recording findings."
+        exit 0
+      fi
+      cat "$ff"
+      ;;
+    clear)
+      if [[ ! -f "$ff" ]]; then
+        info "No findings file for context '${ctx}'"
+        exit 0
+      fi
+      rm -f "$ff"
+      ok "Findings cleared for context '${ctx}'"
+      ;;
+    edit)
+      local editor="${VISUAL:-${EDITOR:-vi}}"
+      [[ ! -f "$ff" ]] && _clankers_findings_init "$ff" "$ctx"
+      "$editor" "$ff"
+      ;;
+    *)
+      err "Unknown findings subcommand: $subcmd"
+      info "Usage: lol findings [show|clear|edit]"
+      exit 1
+      ;;
+  esac
+}
+
 # ── cmd: ask ──────────────────────────────────────────────────────────────
 cmd_ask() {
   local no_log=false
@@ -1784,6 +1839,7 @@ main() {
     cluster)  cmd_cluster  "${cmd_args[@]}" ;;
     context)  cmd_context  "${cmd_args[@]}" ;;
     ready-up) cmd_ready_up "${cmd_args[@]}" ;;
+    findings) cmd_findings "${cmd_args[@]}" ;;
     ask)      cmd_ask      "${cmd_args[@]}" ;;
     config)   cmd_config ;;
     list)     cmd_list ;;

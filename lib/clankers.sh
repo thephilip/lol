@@ -526,20 +526,114 @@ _clankers_send() {
 
 # ── Tool-use loop (Claude and Vertex only) ────────────────────────────────
 
-_CLANKERS_TOOLS='[{
-  "name": "run_omc",
-  "description": "Run an omc command against the active must-gather snapshot and return its output. The must-gather is a read-only offline archive — all commands are safe. Use this to investigate cluster state: pod status, logs, operator conditions, events, prometheus alerts, etc. Prefer running commands over suggesting them. Pipes and grep are supported, e.g. \"get pods -A | grep -v Running\".",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "command": {
-        "type": "string",
-        "description": "Everything after \"omc\". Pipes are supported, e.g. \"get pods -A | grep -v Running\" or \"get events -n openshift-etcd --sort-by=.lastTimestamp | tail -20\""
-      }
-    },
-    "required": ["command"]
+_CLANKERS_TOOLS='[
+  {
+    "name": "run_omc",
+    "description": "Run an omc command against the active must-gather snapshot and return its output. The must-gather is a read-only offline archive — all commands are safe. Use this to investigate cluster state: pod status, logs, operator conditions, events, prometheus alerts, etc. Prefer running commands over suggesting them. Pipes and grep are supported, e.g. \"get pods -A | grep -v Running\".",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Everything after \"omc\". Pipes are supported, e.g. \"get pods -A | grep -v Running\" or \"get events -n openshift-etcd --sort-by=.lastTimestamp | tail -20\""
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "read_findings",
+    "description": "Read the persistent investigation findings log for this context. Call this at the start of a session if findings are not already provided in your context, or to refresh mid-session.",
+    "input_schema": {"type": "object", "properties": {}}
+  },
+  {
+    "name": "append_finding",
+    "description": "Record a finding to the persistent investigation log. Findings survive across sessions. Call this after confirming a fact, eliminating a hypothesis, updating your working hypothesis, or identifying something still needing investigation. Prefer quality over quantity — only record meaningful conclusions.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["Confirmed", "RuledOut", "Hypothesis", "Pending"],
+          "description": "Confirmed=established fact with evidence; RuledOut=eliminated hypothesis; Hypothesis=current best explanation (replaces the previous one); Pending=needs more investigation"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-line summary of the finding"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Key supporting evidence or command output excerpt (keep concise)"
+        }
+      },
+      "required": ["type", "summary"]
+    }
   }
-}]'
+]'
+
+# ── Findings ledger helpers ────────────────────────────────────────────────
+
+_clankers_findings_init() {
+  local f="$1" ctx="$2"
+  cat > "$f" <<EOF
+# Investigation Findings — ${ctx}
+
+## Confirmed
+
+## Ruled Out
+
+## Current Hypothesis
+
+_No hypothesis recorded yet._
+
+## Pending
+
+EOF
+}
+
+# _clankers_findings_append <file> <type> <summary> <evidence>
+# Appends or updates a finding in the structured findings.md file.
+# Uses python3 for reliable multi-line section handling.
+_clankers_findings_append() {
+  local f="$1" ftype="$2" summary="$3" evidence="$4"
+  local ctx; ctx="$(active_ctx)"
+  [[ -z "$ctx" ]] && return 1
+  [[ ! -f "$f" ]] && _clankers_findings_init "$f" "$ctx"
+  local ts; ts="$(date -u '+%Y-%m-%d %H:%M UTC')"
+  python3 - "$f" "$ftype" "$summary" "$evidence" "$ts" <<'PYEOF'
+import sys, re
+path, ftype, summary, evidence, ts = sys.argv[1:]
+with open(path) as fh:
+    content = fh.read()
+
+if ftype == 'Hypothesis':
+    new_sec = f"## Current Hypothesis\n\n_Updated {ts}_\n\n{summary}"
+    if evidence:
+        new_sec += f"\n\n> {evidence}"
+    new_sec += "\n\n"
+    content = re.sub(r'## Current Hypothesis\n.*?(?=\n## |\Z)',
+                     new_sec, content, flags=re.DOTALL)
+else:
+    sec_map = {'Confirmed': '## Confirmed',
+               'RuledOut':  '## Ruled Out',
+               'Pending':   '## Pending'}
+    sec = sec_map.get(ftype)
+    if sec:
+        entry = f"- [{ts}] {summary}"
+        if evidence:
+            entry += f"\n  > {evidence}"
+        # Split on section boundaries, find the target, append entry
+        parts = re.split(r'(?=\n## )', content)
+        for i, part in enumerate(parts):
+            if part.lstrip('\n').startswith(sec):
+                parts[i] = part.rstrip('\n') + f'\n\n{entry}\n'
+                break
+        content = ''.join(parts)
+
+with open(path, 'w') as fh:
+    fh.write(content)
+PYEOF
+}
 
 # Execute a single tool call. Prints result to stdout.
 _clankers_run_tool() {
@@ -562,6 +656,38 @@ _clankers_run_tool() {
       [[ ${#out} -gt 6000 ]] && out="${out:0:6000}"$'\n''...(truncated to 6000 chars)'
       printf '%s' "$out"
       ;;
+    read_findings)
+      local ctx; ctx="$(active_ctx)"
+      if [[ -z "$ctx" ]]; then
+        printf '(no active named context — findings require a named context)'
+        return
+      fi
+      local ff; ff="$(ctx_dir "$ctx")/findings.md"
+      if [[ -f "$ff" ]]; then
+        printf '%s' "$(cat "$ff")"
+      else
+        printf '(no findings recorded yet for context "%s")' "$ctx"
+      fi
+      ;;
+
+    append_finding)
+      local ctx; ctx="$(active_ctx)"
+      if [[ -z "$ctx" ]]; then
+        printf '(no active named context — findings require a named context)'
+        return
+      fi
+      local ftype;    ftype="$(   printf '%s' "$input_json" | jq -r '.type     // empty' 2>/dev/null)"
+      local summary;  summary="$( printf '%s' "$input_json" | jq -r '.summary  // empty' 2>/dev/null)"
+      local evidence; evidence="$(printf '%s' "$input_json" | jq -r '.evidence // ""'    2>/dev/null)"
+      if [[ -z "$ftype" || -z "$summary" ]]; then
+        printf '(error: type and summary are required)'; return
+      fi
+      local ff; ff="$(ctx_dir "$ctx")/findings.md"
+      _clankers_findings_append "$ff" "$ftype" "$summary" "$evidence" \
+        && printf 'Finding recorded (%s).' "$ftype" \
+        || printf '(error writing finding)'
+      ;;
+
     *) printf '(unknown tool: %s)' "$name" ;;
   esac
 }
@@ -986,8 +1112,18 @@ clankers_ask() {
   [[ -n "$cluster_context" ]] && \
     system_prompt+="$(printf '## Current session context\n%b' "$cluster_context")"$'\n\n---\n\n'
 
+  # Load findings from previous sessions into the system prompt
+  local _findings_ctx; _findings_ctx="$(active_ctx)"
+  if [[ -n "$_findings_ctx" ]]; then
+    local _ff; _ff="$(ctx_dir "$_findings_ctx")/findings.md"
+    if [[ -f "$_ff" ]]; then
+      system_prompt+="## Investigation findings from previous sessions"$'\n\n'
+      system_prompt+="$(cat "$_ff")"$'\n\n---\n\n'
+    fi
+  fi
+
   if [[ "$backend" == "claude" || "$backend" == "vertex" ]]; then
-    system_prompt+="You are an expert OpenShift and Red Hat support engineer. You have access to a run_omc tool — use it proactively to run omc commands against the must-gather and incorporate the real output into your analysis. Don't just suggest commands; run them and summarise what you find. Answer concisely and technically."
+    system_prompt+="You are an expert OpenShift and Red Hat support engineer. You have access to tools: run_omc (run commands against the must-gather), read_findings (read the persistent findings log), and append_finding (record a finding). Use run_omc proactively — run commands and summarise real output, don't just suggest them. Use append_finding after confirming facts, ruling out hypotheses, or updating your working hypothesis — findings persist across sessions. Answer concisely and technically."
   else
     system_prompt+="You are an expert OpenShift and Red Hat support engineer. Answer concisely and technically. When recommending investigation steps, provide specific omc or ocm commands and explain what to look for in the output."
   fi
@@ -998,6 +1134,10 @@ clankers_ask() {
   [[ -n "$cluster_id" ]] && info "Cluster ID:  ${cluster_id}"
   [[ -z "$mg_path" && -z "$cluster_id" ]] && \
     info "No cluster context set — answering from skills only"
+  if [[ -n "$_findings_ctx" && -f "$(ctx_dir "$_findings_ctx")/findings.md" ]]; then
+    local _fc; _fc="$(grep -c '^- \[' "$(ctx_dir "$_findings_ctx")/findings.md" 2>/dev/null || echo 0)"
+    info "Findings:    $(ctx_dir "$_findings_ctx")/findings.md (${_fc} entries loaded)"
+  fi
   echo
 
   local ctx; ctx="$(active_ctx)"
