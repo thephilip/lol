@@ -579,20 +579,24 @@ clankers_run() {
     context+="${cluster_chunk:0:$remaining}"
   fi
 
-  # Build system prompt — prepend omc skill excerpt if available.
-  # For cloud backends (claude/openai), include more of the skill since
-  # context windows are larger. For ollama, cap at 2500 chars.
+  # Build system prompt — prepend skill docs. Cloud backends get full content;
+  # ollama caps at 2500 chars per skill. Also loads private skills from
+  # $LOL_CONFIG_DIR/skills/ (never committed to the public repo).
   local skill_prefix=""
-  local _omc_skill="${SCRIPT_DIR}/skills/omc.md"
-  if [[ -f "$_omc_skill" ]]; then
-    local skill_cap=2500
-    [[ "$backend" != "ollama" ]] && skill_cap=0  # 0 = no cap for cloud backends
+  local skill_cap=2500
+  [[ "$backend" != "ollama" ]] && skill_cap=0  # 0 = no cap for cloud backends
+
+  local -a _run_skills=()
+  for _f in "$SCRIPT_DIR/skills/"*.md; do [[ -f "$_f" ]] && _run_skills+=("$_f"); done
+  for _f in "$LOL_CONFIG_DIR/skills/"*.md; do [[ -f "$_f" ]] && _run_skills+=("$_f"); done
+
+  for _sf in "${_run_skills[@]}"; do
     if [[ "$skill_cap" -gt 0 ]]; then
-      skill_prefix="$(head -c "$skill_cap" "$_omc_skill")"$'\n\n'"---"$'\n\n'
+      skill_prefix+="$(head -c "$skill_cap" "$_sf")"$'\n\n---\n\n'
     else
-      skill_prefix="$(cat "$_omc_skill")"$'\n\n'"---"$'\n\n'
+      skill_prefix+="$(cat "$_sf")"$'\n\n---\n\n'
     fi
-  fi
+  done
 
   local system_prompt
   system_prompt="${skill_prefix}You are an expert OpenShift/Kubernetes support engineer analyzing a must-gather snapshot. Be concise and technical. Quote specific error messages from the data. State the most likely root cause first, then list actionable next steps. When suggesting next steps, include specific omc commands to run."
@@ -767,8 +771,11 @@ clankers_ask() {
   local skill_cap=3000
   [[ "$backend" != "ollama" ]] && skill_cap=0
 
-  for _skill in "$SCRIPT_DIR/skills/omc.md" "$SCRIPT_DIR/skills/ocm.md"; do
-    [[ -f "$_skill" ]] || continue
+  local -a _ask_skills=()
+  for _f in "$SCRIPT_DIR/skills/"*.md; do [[ -f "$_f" ]] && _ask_skills+=("$_f"); done
+  for _f in "$LOL_CONFIG_DIR/skills/"*.md; do [[ -f "$_f" ]] && _ask_skills+=("$_f"); done
+
+  for _skill in "${_ask_skills[@]}"; do
     if [[ "$skill_cap" -gt 0 ]]; then
       system_prompt+="$(head -c "$skill_cap" "$_skill")"
     else
