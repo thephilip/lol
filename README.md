@@ -53,7 +53,7 @@ There are two session modes:
 | Mode | How to start | Ledger? |
 |------|-------------|---------|
 | **Anonymous** | `lol use <path>` | No — nothing is recorded |
-| **Named context** | `lol -c <name> use <path>` | Yes — checks, commands, and mg history are all logged |
+| **Named context** | `lol --context <name> use <path>` | Yes — checks, commands, and mg history are all logged |
 
 A named context remains active across shell sessions until you either start a new anonymous session (`lol use <path>`) or resume a different context (`lol context resume <name>`).
 
@@ -238,7 +238,7 @@ lol check etcd
 lol check etcd,nodes,pdbs
 
 # Named context — everything is recorded
-lol -c 04425034-CoolBug use /path/to/must-gather
+lol --context 04425034-CoolBug use /path/to/must-gather
 lol check
 lol get pods -n openshift-etcd
 lol alerts

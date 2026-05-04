@@ -12,7 +12,7 @@ _lol() {
   _arguments -C \
     '(-h --help)'{-h,--help}'[show help and exit]' \
     '(-v --version)'{-v,--version}'[show version and exit]' \
-    '(-c --context)'{-c,--context}'[named context to create or use]:context name:_lol_contexts' \
+    '--context[named context to create or use]:context name:_lol_contexts' \
     '1: :_lol_commands' \
     '*:: :->args'
 

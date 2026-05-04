@@ -64,7 +64,7 @@ Other:
   completion <shell>      Output shell completion script (supported: zsh)
 
 Global flags:
-  --context, -c <name>    Named context to create or use
+  --context <name>        Named context to create or use
   -h, --help              Show this help
   -v, --version           Show version
 
@@ -89,7 +89,7 @@ Examples:
   lol get pods -n openshift-etcd
 
   # Named context — ledger kept, resumable, handoff-ready
-  lol -c 04431153-GroupSync use /path/to/must-gather
+  lol --context 04431153-GroupSync use /path/to/must-gather
   lol check etcd,nodes
   lol alerts
   lol get nodes
@@ -1811,7 +1811,7 @@ main() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --context=*) LOL_CTX_NAME="${1#--context=}"; shift ;;
-      --context|-c) LOL_CTX_NAME="$2"; shift 2 ;;
+      --context) LOL_CTX_NAME="$2"; shift 2 ;;
       --help|-h)    usage; exit 0 ;;
       --version|-v) echo "lol v$VERSION"; exit 0 ;;
       *) remaining+=("$1"); shift ;;
