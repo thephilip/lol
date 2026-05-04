@@ -67,7 +67,7 @@ _lol() {
             '--no-log[do not record this run to the context ledger]' \
             '--all[include inactive alerts (default: firing and pending only)]'
           ;;
-        limited-support|addons)
+        limited-support|addons|subscription)
           _arguments \
             '--no-log[do not record this run to the context ledger]'
           ;;
@@ -123,6 +123,7 @@ _lol_commands() {
     'service-log:fetch service log entries from OCM'
     'limited-support:check for limited support reasons via OCM'
     'addons:list installed addons and their state via OCM'
+    'subscription:show subscription details (plan, support level, expiry) via OCM'
     'get:get resources (omc from must-gather, or live oc)'
     'describe:describe a resource (omc from must-gather, or live oc)'
     'logs:view pod logs (omc from must-gather, or live oc)'

@@ -46,6 +46,7 @@ ocm commands (require ocm login; logged to ledger when in a named context):
   service-log [--size N]  Recent service log entries (default: 20)
   limited-support         Check whether the cluster has limited support reasons
   addons                  List installed addons and their state via OCM
+  subscription            Show subscription details (plan, support level, expiry)
 
 omc / oc passthrough (context-aware; logged to ledger when in a named context):
   Falls back to live oc automatically when no must-gather is set.
@@ -1481,6 +1482,101 @@ cmd_addons() {
   return $rc
 }
 
+# ── cmd: subscription ─────────────────────────────────────────────────────
+cmd_subscription() {
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol subscription"
+    exit 2
+  fi
+
+  local cluster_id
+  cluster_id="$(resolve_cluster_id)" || exit 1
+
+  local no_log=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-log) no_log=true; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+  local tmp_out; tmp_out="$(mktemp)"
+
+  section "Subscription: $cluster_id"
+
+  ocm get /api/accounts_mgmt/v1/subscriptions \
+    --parameter "search=external_cluster_id='${cluster_id}'" \
+    --parameter size=1 >"$tmp_out" 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v jq &>/dev/null; then
+    local total; total="$(jq -r '.total // 0' "$tmp_out")"
+    if [[ "$total" -eq 0 ]]; then
+      warn "No subscription found for cluster: $cluster_id"
+    else
+      local plan status support_level managed cloud created billing_expiry eval_expiry trial_end org_id
+      plan="$(          jq -r '.items[0].plan.id                         // "unknown"' "$tmp_out")"
+      status="$(        jq -r '.items[0].status                          // "unknown"' "$tmp_out")"
+      support_level="$( jq -r '.items[0].support_level                   // "unknown"' "$tmp_out")"
+      managed="$(       jq -r '.items[0].managed                         // false'     "$tmp_out")"
+      cloud="$(         jq -r '.items[0].cloud_provider_id               // "unknown"' "$tmp_out")"
+      created="$(       jq -r '.items[0].created_at[0:19]                // "unknown"' "$tmp_out")"
+      org_id="$(        jq -r '.items[0].organization_id                 // "unknown"' "$tmp_out")"
+      billing_expiry="$(jq -r '.items[0].billing_expiration_date[0:10]   // ""'        "$tmp_out")"
+      eval_expiry="$(   jq -r '.items[0].eval_expiration_date[0:10]      // ""'        "$tmp_out")"
+      trial_end="$(     jq -r '.items[0].trial_end_date[0:10]            // ""'        "$tmp_out")"
+
+      local status_str
+      case "$status" in
+        Active)       status_str="${GREEN}${status}${RESET}" ;;
+        Stale|Deprovisioned) status_str="${RED}${status}${RESET}" ;;
+        *)            status_str="${DIM}${status}${RESET}" ;;
+      esac
+
+      local support_str
+      case "$support_level" in
+        Premium)  support_str="${GREEN}${support_level}${RESET}" ;;
+        Standard) support_str="${CYAN}${support_level}${RESET}" ;;
+        Eval|"")  support_str="${YELLOW}${support_level:-Eval}${RESET}" ;;
+        *)        support_str="${DIM}${support_level}${RESET}" ;;
+      esac
+
+      printf "  ${BOLD}%-22s${RESET} %s\n"       "Plan:"           "$plan"
+      printf "  ${BOLD}%-22s${RESET} $(echo -e "${status_str}")\n"  "Status:"
+      printf "  ${BOLD}%-22s${RESET} $(echo -e "${support_str}")\n" "Support level:"
+      printf "  ${BOLD}%-22s${RESET} %s\n"       "Managed:"        "$managed"
+      printf "  ${BOLD}%-22s${RESET} %s\n"       "Cloud provider:"  "$cloud"
+      echo
+      printf "  ${BOLD}%-22s${RESET} %s\n"       "Created:"        "$created"
+      [[ -n "$billing_expiry" && "$billing_expiry" != "0001-01-01" ]] && \
+        printf "  ${BOLD}%-22s${RESET} %s\n"     "Billing expiry:" "$billing_expiry"
+      [[ -n "$eval_expiry" && "$eval_expiry" != "0001-01-01" ]] && \
+        printf "  ${BOLD}%-22s${RESET} %s\n"     "Eval expiry:"    "$eval_expiry"
+      [[ -n "$trial_end" && "$trial_end" != "0001-01-01" ]] && \
+        printf "  ${BOLD}%-22s${RESET} %s\n"     "Trial end:"      "$trial_end"
+      echo
+      printf "  ${BOLD}%-22s${RESET} %s\n"       "Organization ID:" "$org_id"
+      echo
+    fi
+  else
+    cat "$tmp_out"
+  fi
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    {
+      printf '[%s] $ lol subscription (cluster: %s)\n' "$ts" "$cluster_id"
+      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '\n'
+    } >> "$cmd_log"
+  fi
+
+  rm -f "$tmp_out"
+  return $rc
+}
+
 # ── cmd: limited-support ──────────────────────────────────────────────────
 cmd_limited_support() {
   if ! command -v ocm &>/dev/null; then
@@ -1928,6 +2024,7 @@ main() {
     service-log)     cmd_service_log    "${cmd_args[@]}" ;;
     limited-support) cmd_limited_support "${cmd_args[@]}" ;;
     addons)          cmd_addons         "${cmd_args[@]}" ;;
+    subscription)    cmd_subscription   "${cmd_args[@]}" ;;
     reset)           cmd_reset          "${cmd_args[@]}" ;;
     completion)      cmd_completion     "${cmd_args[@]}" ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
