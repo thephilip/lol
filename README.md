@@ -140,6 +140,7 @@ lol alerts                  # alert state from the active must-gather
 lol service-log             # recent service log entries via OCM (newest first)
 lol service-log --size 50   # fetch more entries (default: 20)
 lol limited-support         # check for limited support reasons
+lol addons                  # list installed addons and their state
 ```
 
 All OCM commands require `ocm` to be installed and authenticated — see [OCM integration](#ocm-integration). Output is logged to `commands.log` when a named context is active, with PII scrubbed before writing.
@@ -216,7 +217,7 @@ This removes the symlink and optionally the install directory and context data.
 | `bash` ≥ 4.0 | Yes | Core shell runtime |
 | `jq` | Yes | JSON parsing — checks, OCM commands, and AI features |
 | `curl` | Yes | AI backend communication (ollama, Claude, Vertex, OpenAI) |
-| [`ocm`](https://github.com/openshift-online/ocm-cli) | For OCM commands | `lol alerts`, `service-log`, `limited-support`, `cluster --cluster`, etc. |
+| [`ocm`](https://github.com/openshift-online/ocm-cli) | For OCM commands | `lol alerts`, `service-log`, `limited-support`, `addons`, `cluster --cluster`, etc. |
 | [`gcloud`](https://cloud.google.com/sdk/docs/install) | For Vertex AI | Authentication for the Vertex AI backend (`lol config` → vertex) |
 | [`ollama`](https://ollama.ai) | For local AI | Local model inference — `lol ask`, `--with-clankers` with ollama backend |
 | `gum` | No | Enhanced TUI prompts — `lol config`, interactive confirmations |
@@ -309,6 +310,7 @@ Some commands query live cluster data via [`ocm`](https://github.com/openshift-o
 | `lol alerts` | No | Alert state from the active must-gather (via `omc`) |
 | `lol service-log` | Yes | Recent service log entries posted for the cluster |
 | `lol limited-support` | Yes | Whether the cluster has limited support reasons on record |
+| `lol addons` | Yes | Installed addons and their state (ID, state, operator version) |
 | Everything else | No | Fully offline — works against any must-gather |
 
 ### Setup

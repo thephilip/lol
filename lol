@@ -45,6 +45,7 @@ ocm commands (require ocm login; logged to ledger when in a named context):
   alerts [--all]          Show firing/pending alerts from the must-gather (--all for inactive too)
   service-log [--size N]  Recent service log entries (default: 20)
   limited-support         Check whether the cluster has limited support reasons
+  addons                  List installed addons and their state via OCM
 
 omc / oc passthrough (context-aware; logged to ledger when in a named context):
   Falls back to live oc automatically when no must-gather is set.
@@ -1408,6 +1409,78 @@ cmd_service_log() {
   return $rc
 }
 
+# ── cmd: addons ───────────────────────────────────────────────────────────
+cmd_addons() {
+  if ! command -v ocm &>/dev/null; then
+    err "'ocm' not found in PATH — required for lol addons"
+    exit 2
+  fi
+
+  local cluster_id
+  cluster_id="$(resolve_cluster_id)" || exit 1
+
+  local no_log=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-log) no_log=true; shift ;;
+      *) err "Unknown option: $1"; exit 1 ;;
+    esac
+  done
+
+  local ocm_id
+  ocm_id="$(resolve_ocm_id "$cluster_id")" || exit 1
+
+  local ctx; ctx="$(active_ctx)"
+  local rc=0
+  local tmp_out; tmp_out="$(mktemp)"
+
+  section "Addons: $cluster_id"
+
+  ocm get "/api/clusters_mgmt/v1/clusters/${ocm_id}/addons" \
+    >"$tmp_out" 2>&1 || rc=$?
+
+  if [[ $rc -eq 0 ]] && command -v jq &>/dev/null; then
+    local total; total="$(jq -r '.total // 0' "$tmp_out")"
+    if [[ "$total" -eq 0 ]]; then
+      info "No addons installed on this cluster"
+    else
+      info "$total addon(s) installed"
+      echo
+      printf "  ${BOLD}%-40s %-20s %s${RESET}\n" "ADDON ID" "STATE" "OPERATOR VERSION"
+      jq -r '.items[]? | [
+        (.id // "unknown"),
+        (.state // "unknown"),
+        (.operator_version // "—")
+      ] | @tsv' "$tmp_out" | sort | while IFS=$'\t' read -r id state ver; do
+        local state_str
+        case "$state" in
+          ready)    state_str="${GREEN}${state}${RESET}" ;;
+          failed)   state_str="${RED}${state}${RESET}" ;;
+          installing|updating) state_str="${YELLOW}${state}${RESET}" ;;
+          *)        state_str="${DIM}${state}${RESET}" ;;
+        esac
+        printf "  %-40s $(echo -e "${state_str}")%-$((20 - ${#state}))s %s\n" "$id" "" "$ver"
+      done
+      echo
+    fi
+  else
+    cat "$tmp_out"
+  fi
+
+  if ! $no_log && [[ -n "$ctx" ]]; then
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
+    {
+      printf '[%s] $ lol addons (cluster: %s)\n' "$ts" "$cluster_id"
+      scrub_pii "$(sed 's/\x1b\[[0-9;]*[mK]//g' "$tmp_out")"
+      printf '\n'
+    } >> "$cmd_log"
+  fi
+
+  rm -f "$tmp_out"
+  return $rc
+}
+
 # ── cmd: limited-support ──────────────────────────────────────────────────
 cmd_limited_support() {
   if ! command -v ocm &>/dev/null; then
@@ -1854,6 +1927,7 @@ main() {
     alerts)          cmd_alerts         "${cmd_args[@]}" ;;
     service-log)     cmd_service_log    "${cmd_args[@]}" ;;
     limited-support) cmd_limited_support "${cmd_args[@]}" ;;
+    addons)          cmd_addons         "${cmd_args[@]}" ;;
     reset)           cmd_reset          "${cmd_args[@]}" ;;
     completion)      cmd_completion     "${cmd_args[@]}" ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
