@@ -49,6 +49,7 @@ print_banner() {
   printf '\n'
 }
 
+cmd_trace() { [[ "${LOL_QUIET:-}" == "1" ]] || echo -e "${DIM}  \$${RESET} $*" >&2; }
 header()   { echo -e "${BOLD}==> $*${RESET}"; }
 section()  { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${RESET}"; }
 ok()       { echo -e "${GREEN}[  OK  ]${RESET} $*"; }

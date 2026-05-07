@@ -70,6 +70,9 @@ Global flags:
   -h, --help              Show this help
   -v, --version           Show version
 
+Environment:
+  LOL_QUIET=1             Suppress the command trace printed before each wrapped tool call
+
 Options for check and omc passthrough:
   --no-log                Don't record this run to the context ledger
 
@@ -1221,6 +1224,7 @@ cmd_oc_passthrough() {
     local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
     local tmp_out; tmp_out="$(mktemp)"
 
+    cmd_trace "oc $subcmd${oc_args[*]:+ ${oc_args[*]}} (live)"
     oc "$subcmd" "${oc_args[@]}" >"$tmp_out" 2>&1 || rc=$?
     cat "$tmp_out"
 
@@ -1232,6 +1236,7 @@ cmd_oc_passthrough() {
 
     rm -f "$tmp_out"
   else
+    cmd_trace "oc $subcmd${oc_args[*]:+ ${oc_args[*]}} (live)"
     oc "$subcmd" "${oc_args[@]}" || rc=$?
   fi
 
@@ -1280,6 +1285,7 @@ cmd_omc_passthrough() {
     local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
     local tmp_out; tmp_out="$(mktemp)"
 
+    cmd_trace "omc $subcmd${omc_args[*]:+ ${omc_args[*]}}"
     omc "$subcmd" "${omc_args[@]}" >"$tmp_out" 2>&1 || rc=$?
     cat "$tmp_out"
 
@@ -1291,6 +1297,7 @@ cmd_omc_passthrough() {
 
     rm -f "$tmp_out"
   else
+    cmd_trace "omc $subcmd${omc_args[*]:+ ${omc_args[*]}}"
     omc "$subcmd" "${omc_args[@]}" || rc=$?
   fi
 
@@ -1339,6 +1346,7 @@ cmd_alerts() {
     local cmd_log; cmd_log="$(ctx_dir "$ctx")/commands.log"
     local tmp_out; tmp_out="$(mktemp)"
 
+    cmd_trace "${omc_cmd[*]}"
     "${omc_cmd[@]}" >"$tmp_out" 2>&1 || rc=$?
     cat "$tmp_out"
 
@@ -1350,6 +1358,7 @@ cmd_alerts() {
 
     rm -f "$tmp_out"
   else
+    cmd_trace "${omc_cmd[*]}"
     "${omc_cmd[@]}" || rc=$?
   fi
 
@@ -1381,6 +1390,7 @@ cmd_service_log() {
 
   section "Service Log: $cluster_id"
 
+  cmd_trace "ocm get /api/service_logs/v1/clusters/cluster_logs --parameter cluster_uuid=${cluster_id} --parameter size=${size}"
   ocm get /api/service_logs/v1/clusters/cluster_logs \
     --parameter "cluster_uuid=${cluster_id}" \
     --parameter "orderBy=timestamp desc" \
@@ -1437,6 +1447,7 @@ cmd_addons() {
 
   section "Addons: $cluster_id"
 
+  cmd_trace "ocm get /api/clusters_mgmt/v1/clusters/${ocm_id}/addons"
   ocm get "/api/clusters_mgmt/v1/clusters/${ocm_id}/addons" \
     >"$tmp_out" 2>&1 || rc=$?
 
@@ -1506,6 +1517,7 @@ cmd_subscription() {
 
   section "Subscription: $cluster_id"
 
+  cmd_trace "ocm get /api/accounts_mgmt/v1/subscriptions --parameter search=external_cluster_id='${cluster_id}'"
   ocm get /api/accounts_mgmt/v1/subscriptions \
     --parameter "search=external_cluster_id='${cluster_id}'" \
     --parameter size=1 >"$tmp_out" 2>&1 || rc=$?
@@ -1604,6 +1616,7 @@ cmd_limited_support() {
 
   section "Limited Support: $cluster_id"
 
+  cmd_trace "ocm get /api/clusters_mgmt/v1/clusters/${ocm_id}/limited_support_reasons"
   ocm get "/api/clusters_mgmt/v1/clusters/${ocm_id}/limited_support_reasons" \
     >"$tmp_out" 2>&1 || rc=$?
 
