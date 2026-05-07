@@ -300,6 +300,18 @@ LOL_CLANKERS_MODEL=llama3.2:3b
 LOL_CLANKERS_API=http://localhost:11434
 ```
 
+**Environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOL_QUIET=1` | off | Suppress the `$ <command>` trace printed before each wrapped `omc`/`oc`/`ocm` call |
+| `LOL_CLANKERS_MODEL` | `gemma2:2b` | AI model for `lol check --with-clankers` and `lol ask` |
+| `LOL_CLANKERS_BACKEND` | `ollama` | AI backend (`ollama`, `claude`, `vertex`, `openai`) |
+| `LOL_CLANKERS_API` | `http://localhost:11434` | Endpoint for `ollama`/`openai` backends |
+| `LOL_CLANKERS_API_KEY` | — | API key for `claude`/`openai` backends |
+| `LOL_VERTEX_PROJECT` | auto-detect | GCP project ID for the `vertex` backend |
+| `LOL_VERTEX_REGION` | `us-east5` | GCP region for the `vertex` backend |
+
 lol infers the relevant namespace(s) from keywords in your query (`marketplace`, `etcd`, `ingress`, etc.) and gathers targeted pod status, warning events, and logs from problem pods. Broad cluster-level data (cluster operators, nodes, alerts) is used when no specific component is inferred. Context is capped to keep the prompt within small model limits.
 
 ## OCM integration
