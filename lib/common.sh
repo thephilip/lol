@@ -73,8 +73,12 @@ resolve_mg_path() {
       if [[ -f "$meta" ]]; then
         path="$(grep '^CURRENT_MG=' "$meta" | cut -d= -f2-)"
       fi
-    fi
-    if [[ -z "$path" ]] && [[ -f "$LOL_CONTEXT_FILE" ]]; then
+      # Named context is active — don't fall through to anonymous session file
+      if [[ -z "$path" ]]; then
+        err "No must-gather set. Run: lol use <path>"
+        return 1
+      fi
+    elif [[ -f "$LOL_CONTEXT_FILE" ]]; then
       path="$(cat "$LOL_CONTEXT_FILE")"
     fi
     if [[ -z "$path" ]]; then

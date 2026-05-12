@@ -416,6 +416,7 @@ cmd_context_new() {
   ctx_set "$name" "CREATED" "$ts"
   ctx_set "$name" "UPDATED" "$ts"
   set_active_ctx "$name"
+  rm -f "$LOL_CONTEXT_FILE"
 
   ok "Created and activated context: $name"
   info "Next: lol use <must-gather-path>  or  lol cluster --cluster <id>"
