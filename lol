@@ -127,7 +127,7 @@ ctx_set() {
   local meta; meta="$(ctx_meta "$name")"
   mkdir -p "$(ctx_dir "$name")/runs"
   if [[ -f "$meta" ]] && grep -q "^${key}=" "$meta"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$meta"
+    sed -i'' "s|^${key}=.*|${key}=${value}|" "$meta"
   else
     echo "${key}=${value}" >> "$meta"
   fi
