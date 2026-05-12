@@ -173,8 +173,20 @@ The install script will:
 2. Symlink `~/.local/bin/lol` → the clone (overridable via `$LOL_BIN_DIR`)
 3. Warn if `~/.local/bin` is not in your `$PATH`
 4. Offer to install zsh tab completions to a detected completions directory
+5. Offer to add shell integration (prompt indicator) to your rc file
 
 Because the install directory is a git clone, `lol upgrade` works out of the box.
+
+### Shell integration (prompt indicator)
+
+When a named context is active, `lol` can show a `[lol:<context>/<cluster>]` indicator in your shell prompt. The install script will offer to set this up automatically. To add it manually:
+
+```bash
+# In ~/.zshrc or ~/.bashrc:
+eval "$(lol shell-init)"
+```
+
+This works with both bash (`PROMPT_COMMAND`) and zsh (`precmd` hook). The indicator appears when a named context is active and clears automatically when none is set.
 
 ### Shell completions
 

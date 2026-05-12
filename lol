@@ -64,6 +64,8 @@ Other:
   ask ["question"]        AI chat with omc/ocm skills and cluster context
                           No argument starts an interactive session
   completion <shell>      Output shell completion script (supported: zsh)
+  shell-init              Output shell integration for prompt indicator
+                          Add to rc file: eval "\$(lol shell-init)"
 
 Global flags:
   --context <name>        Named context to create or use
@@ -966,11 +968,12 @@ _cluster_set() {
         local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
         ctx_input="${ctx_input:-$cluster_name}"
         local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-        ctx_set "$ctx_input" "NAME"       "$ctx_input"
-        ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
-        ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
-        ctx_set "$ctx_input" "CREATED"    "$ts"
-        ctx_set "$ctx_input" "UPDATED"    "$ts"
+        ctx_set "$ctx_input" "NAME"         "$ctx_input"
+        ctx_set "$ctx_input" "CLUSTER_ID"  "$external_id"
+        ctx_set "$ctx_input" "CLUSTER_NAME" "$cluster_name"
+        ctx_set "$ctx_input" "OCM_ID"      "$ocm_id"
+        ctx_set "$ctx_input" "CREATED"     "$ts"
+        ctx_set "$ctx_input" "UPDATED"     "$ts"
         set_active_ctx "$ctx_input"
         ok "Created and activated context: $ctx_input"
         echo
@@ -979,9 +982,10 @@ _cluster_set() {
         ;;
       *)
         local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-        ctx_set "$cur_ctx" "CLUSTER_ID" "$external_id"
-        ctx_set "$cur_ctx" "OCM_ID"     "$ocm_id"
-        ctx_set "$cur_ctx" "UPDATED"    "$ts"
+        ctx_set "$cur_ctx" "CLUSTER_ID"   "$external_id"
+        ctx_set "$cur_ctx" "CLUSTER_NAME" "$cluster_name"
+        ctx_set "$cur_ctx" "OCM_ID"       "$ocm_id"
+        ctx_set "$cur_ctx" "UPDATED"      "$ts"
         ok "Cluster associated with context '${cur_ctx}'"
         echo
         _cluster_display_ocm "$cluster_json"
@@ -996,11 +1000,12 @@ _cluster_set() {
     local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
     ctx_input="${ctx_input:-$cluster_name}"
     local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-    ctx_set "$ctx_input" "NAME"       "$ctx_input"
-    ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
-    ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
-    ctx_set "$ctx_input" "CREATED"    "$ts"
-    ctx_set "$ctx_input" "UPDATED"    "$ts"
+    ctx_set "$ctx_input" "NAME"         "$ctx_input"
+    ctx_set "$ctx_input" "CLUSTER_ID"  "$external_id"
+    ctx_set "$ctx_input" "CLUSTER_NAME" "$cluster_name"
+    ctx_set "$ctx_input" "OCM_ID"      "$ocm_id"
+    ctx_set "$ctx_input" "CREATED"     "$ts"
+    ctx_set "$ctx_input" "UPDATED"     "$ts"
     set_active_ctx "$ctx_input"
     ok "Created and activated context: $ctx_input"
     echo
@@ -1028,11 +1033,12 @@ _cluster_set() {
       local ctx_input; ctx_input="$(_tui_input "Context name" "$cluster_name")"
       ctx_input="${ctx_input:-$cluster_name}"
       local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
-      ctx_set "$ctx_input" "NAME"       "$ctx_input"
-      ctx_set "$ctx_input" "CLUSTER_ID" "$external_id"
-      ctx_set "$ctx_input" "OCM_ID"     "$ocm_id"
-      ctx_set "$ctx_input" "CREATED"    "$ts"
-      ctx_set "$ctx_input" "UPDATED"    "$ts"
+      ctx_set "$ctx_input" "NAME"         "$ctx_input"
+      ctx_set "$ctx_input" "CLUSTER_ID"  "$external_id"
+      ctx_set "$ctx_input" "CLUSTER_NAME" "$cluster_name"
+      ctx_set "$ctx_input" "OCM_ID"      "$ocm_id"
+      ctx_set "$ctx_input" "CREATED"     "$ts"
+      ctx_set "$ctx_input" "UPDATED"     "$ts"
       set_active_ctx "$ctx_input"
       ok "Created and activated context: $ctx_input"
       echo
@@ -1972,6 +1978,40 @@ cmd_completion() {
   esac
 }
 
+# ── cmd: shell-init ───────────────────────────────────────────────────────
+cmd_shell_init() {
+  local cfg_dir="${LOL_CONFIG_DIR}"
+  cat <<SHELL_INIT
+# lol shell integration — add to your rc file:
+#   eval "\$(lol shell-init)"
+_lol_ps1_update() {
+  local ctx_file="${cfg_dir}/active_context"
+  local ctx_dir="${cfg_dir}/contexts"
+  if [[ -f "\$ctx_file" ]]; then
+    local _ctx _cluster _meta
+    _ctx="\$(cat "\$ctx_file")"
+    _meta="\$ctx_dir/\$_ctx/meta.env"
+    _cluster=""
+    [[ -f "\$_meta" ]] && _cluster="\$(grep '^CLUSTER_NAME=' "\$_meta" | cut -d= -f2-)"
+    if [[ -n "\$_cluster" ]]; then
+      LOL_PS1="[lol:\${_ctx}/\${_cluster}] "
+    else
+      LOL_PS1="[lol:\${_ctx}] "
+    fi
+  else
+    LOL_PS1=""
+  fi
+}
+if [[ -n "\${ZSH_VERSION:-}" ]]; then
+  autoload -Uz add-zsh-hook
+  add-zsh-hook precmd _lol_ps1_update
+else
+  PROMPT_COMMAND="_lol_ps1_update\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}"
+fi
+PS1='\${LOL_PS1}'"$PS1"
+SHELL_INIT
+}
+
 # ── cmd: reset ────────────────────────────────────────────────────────────
 cmd_reset() {
   warn "This will permanently delete all lol session data:"
@@ -2041,6 +2081,7 @@ main() {
     subscription)    cmd_subscription   "${cmd_args[@]}" ;;
     reset)           cmd_reset          "${cmd_args[@]}" ;;
     completion)      cmd_completion     "${cmd_args[@]}" ;;
+    shell-init)      cmd_shell_init ;;
     *) err "Unknown command: '$cmd'"; echo; usage; exit 1 ;;
   esac
 }

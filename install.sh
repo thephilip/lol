@@ -78,6 +78,22 @@ uninstall() {
     fi
   done
 
+  # Remove shell integration lines if present
+  local rc
+  for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    if [[ -f "$rc" ]] && grep -qF 'lol shell-init' "$rc" 2>/dev/null; then
+      read -rp "Remove lol shell integration from $rc? [Y/n] " confirm
+      if [[ "${confirm,,}" != "n" ]]; then
+        grep -vF 'lol shell-init' "$rc" \
+          | grep -v '^# lol shell integration$' \
+          > "${rc}.loltmp" && mv "${rc}.loltmp" "$rc"
+        ok "Removed shell integration from $rc"
+      else
+        info "Kept: $rc"
+      fi
+    fi
+  done
+
   ok "Done."
 }
 
@@ -175,6 +191,39 @@ install() {
       printf "  ${B}fpath=(~/.zfunc \$fpath)${Z}\n"
       echo
     fi
+  fi
+
+  # Shell integration (optional)
+  step "Shell integration (prompt indicator)"
+  echo "  Adds a [lol:<context>/<cluster>] indicator to your shell prompt"
+  echo "  when a named context is active."
+  echo
+
+  local rc_file=""
+  if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == */zsh ]]; then
+    rc_file="${ZDOTDIR:-$HOME}/.zshrc"
+  elif [[ -n "${BASH_VERSION:-}" || "${SHELL:-}" == */bash ]]; then
+    rc_file="$HOME/.bashrc"
+  fi
+
+  local eval_line='eval "$(lol shell-init)"'
+  if [[ -n "$rc_file" ]]; then
+    if grep -qF 'lol shell-init' "$rc_file" 2>/dev/null; then
+      ok "Shell integration already present in $rc_file"
+    else
+      read -rp "  Add shell integration to $rc_file? [Y/n] " confirm
+      if [[ "${confirm,,}" != "n" ]]; then
+        printf '\n# lol shell integration\n%s\n' "$eval_line" >> "$rc_file"
+        ok "Added to $rc_file"
+        info "Restart your shell or run: source $rc_file"
+      else
+        info "Skipped. Add manually: $eval_line"
+      fi
+    fi
+  else
+    info "Could not detect shell rc file."
+    echo "  Add manually to your shell profile:"
+    printf "  ${B}%s${Z}\n" "$eval_line"
   fi
 
   step "Done"
