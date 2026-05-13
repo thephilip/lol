@@ -2008,7 +2008,7 @@ if [[ -n "\${ZSH_VERSION:-}" ]]; then
 else
   PROMPT_COMMAND="_lol_ps1_update\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}"
 fi
-PS1='\${LOL_PS1}'"$PS1"
+PS1='\${LOL_PS1}'"\$PS1"
 SHELL_INIT
 }
 
