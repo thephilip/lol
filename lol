@@ -1980,35 +1980,39 @@ cmd_completion() {
 
 # ── cmd: shell-init ───────────────────────────────────────────────────────
 cmd_shell_init() {
-  local cfg_dir="${LOL_CONFIG_DIR}"
-  cat <<SHELL_INIT
+  sed "s|LOL_CFG|${LOL_CONFIG_DIR}|g" <<'SHELL_INIT'
 # lol shell integration — add to your rc file:
-#   eval "\$(lol shell-init)"
+#   eval "$(lol shell-init)"
 _lol_ps1_update() {
-  local ctx_file="${cfg_dir}/active_context"
-  local ctx_dir="${cfg_dir}/contexts"
-  if [[ -f "\$ctx_file" ]]; then
+  local ctx_file="LOL_CFG/active_context"
+  local ctx_dir="LOL_CFG/contexts"
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    local _c_on=$'%{\e[36m%}' _c_off=$'%{\e[0m%}'
+  else
+    local _c_on=$'\[\e[36m\]' _c_off=$'\[\e[0m\]'
+  fi
+  if [[ -f "$ctx_file" ]]; then
     local _ctx _cluster _meta
-    _ctx="\$(cat "\$ctx_file")"
-    _meta="\$ctx_dir/\$_ctx/meta.env"
+    _ctx="$(cat "$ctx_file")"
+    _meta="$ctx_dir/$_ctx/meta.env"
     _cluster=""
-    [[ -f "\$_meta" ]] && _cluster="\$(grep '^CLUSTER_NAME=' "\$_meta" | cut -d= -f2-)"
-    if [[ -n "\$_cluster" ]]; then
-      LOL_PS1="[lol:\${_ctx}/\${_cluster}] "
+    [[ -f "$_meta" ]] && _cluster="$(grep '^CLUSTER_NAME=' "$_meta" | cut -d= -f2-)"
+    if [[ -n "$_cluster" ]]; then
+      LOL_PS1="${_c_on}(${_ctx}/${_cluster})${_c_off} "
     else
-      LOL_PS1="[lol:\${_ctx}] "
+      LOL_PS1="${_c_on}(${_ctx})${_c_off} "
     fi
   else
     LOL_PS1=""
   fi
 }
-if [[ -n "\${ZSH_VERSION:-}" ]]; then
+if [[ -n "${ZSH_VERSION:-}" ]]; then
   autoload -Uz add-zsh-hook
   add-zsh-hook precmd _lol_ps1_update
 else
-  PROMPT_COMMAND="_lol_ps1_update\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}"
+  PROMPT_COMMAND="_lol_ps1_update${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
-PS1='\${LOL_PS1}'"\$PS1"
+PS1='${LOL_PS1}'"$PS1"
 SHELL_INIT
 }
 
