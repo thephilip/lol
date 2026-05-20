@@ -229,7 +229,7 @@ This removes the symlink and optionally the install directory and context data.
 | [`omc`](https://github.com/gmeghnag/omc) | Yes | Must-gather parsing — all check and passthrough commands |
 | `bash` ≥ 4.0 | Yes | Core shell runtime |
 | `jq` | Yes | JSON parsing — checks, OCM commands, and AI features |
-| `curl` | Yes | AI backend communication (ollama, Claude, Vertex, OpenAI) |
+| `curl` | Yes | AI backend communication (ollama, Claude, Vertex, OpenAI, Gemini) |
 | [`ocm`](https://github.com/openshift-online/ocm-cli) | For OCM commands | `lol alerts`, `service-log`, `limited-support`, `addons`, `subscription`, `cluster --cluster`, etc. |
 | [`gcloud`](https://cloud.google.com/sdk/docs/install) | For Vertex AI | Authentication for the Vertex AI backend (`lol config` → vertex) |
 | [`ollama`](https://ollama.ai) | For local AI | Local model inference — `lol ask`, `--with-clankers` with ollama backend |
@@ -318,9 +318,9 @@ LOL_CLANKERS_API=http://localhost:11434
 |----------|---------|-------------|
 | `LOL_QUIET=1` | off | Suppress the `$ <command>` trace printed before each wrapped `omc`/`oc`/`ocm` call |
 | `LOL_CLANKERS_MODEL` | `gemma2:2b` | AI model for `lol check --with-clankers` and `lol ask` |
-| `LOL_CLANKERS_BACKEND` | `ollama` | AI backend (`ollama`, `claude`, `vertex`, `openai`) |
+| `LOL_CLANKERS_BACKEND` | `ollama` | AI backend (`ollama`, `claude`, `vertex`, `openai`, `gemini`) |
 | `LOL_CLANKERS_API` | `http://localhost:11434` | Endpoint for `ollama`/`openai` backends |
-| `LOL_CLANKERS_API_KEY` | — | API key for `claude`/`openai` backends |
+| `LOL_CLANKERS_API_KEY` | — | API key for `claude`/`openai`/`gemini` backends |
 | `LOL_VERTEX_PROJECT` | auto-detect | GCP project ID for the `vertex` backend |
 | `LOL_VERTEX_REGION` | `us-east5` | GCP region for the `vertex` backend |
 

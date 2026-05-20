@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib/clankers.sh — AI integration for lol
-# Supports: ollama (local), Claude API, OpenAI-compatible endpoints
+# Supports: ollama (local), Claude API, Vertex AI, OpenAI-compatible endpoints, Google Gemini
 
 # Defaults — override via ~/.config/lol/config.env or environment
 LOL_CLANKERS_BACKEND="${LOL_CLANKERS_BACKEND:-ollama}"
@@ -178,6 +178,34 @@ clankers_test() {
       rm -f /tmp/_lol_ctest.json
       ;;
 
+    gemini)
+      if [[ -z "$api_key" ]]; then
+        err "No API key configured"; return 1
+      fi
+      info "Testing Gemini API connectivity..."
+      local resp http_code
+      resp="$(curl -sw "%{http_code}" -o /tmp/_lol_ctest.json \
+        "https://generativelanguage.googleapis.com/v1beta/models" \
+        -H "x-goog-api-key: ${api_key}" 2>/dev/null)"
+      http_code="${resp: -3}"
+      case "$http_code" in
+        200)
+          local count; count="$(jq '.models | length' /tmp/_lol_ctest.json 2>/dev/null)"
+          ok "Gemini API reachable — ${count} model(s) available"
+          if jq -r '.models[].name' /tmp/_lol_ctest.json 2>/dev/null \
+              | grep -qx "models/${model}"; then
+            ok "Model '${model}' is available"
+          else
+            warn "Model '${model}' not listed — it may still work, or check the model ID"
+          fi
+          ;;
+        400) err "Bad request — check the API key format"; return 1 ;;
+        403) err "Authentication failed — check your Gemini API key"; return 1 ;;
+        *)   err "Unexpected response (HTTP ${http_code}) from Gemini API"; return 1 ;;
+      esac
+      rm -f /tmp/_lol_ctest.json
+      ;;
+
     ollama|*)
       local endpoint="${api:-http://localhost:11434}"
       info "Testing ollama at ${endpoint}..."
@@ -241,6 +269,36 @@ _clankers_list_models() {
         -H "Authorization: Bearer ${api_key}" 2>/dev/null \
         | jq -r '.data[].id' 2>/dev/null | sort
       ;;
+    gemini)
+      [[ -z "$api_key" ]] && {
+        # No key yet — return a useful hardcoded list so config menu still works
+        printf '%s\n' \
+          "gemini-2.5-pro" \
+          "gemini-2.5-flash" \
+          "gemini-2.0-flash" \
+          "gemini-2.0-flash-lite" \
+          "gemini-1.5-pro" \
+          "gemini-1.5-flash"
+        return
+      }
+      local _fetched
+      _fetched="$(curl -sf \
+        "https://generativelanguage.googleapis.com/v1beta/models" \
+        -H "x-goog-api-key: ${api_key}" 2>/dev/null \
+        | jq -r '.models[] | select(.supportedGenerationMethods[]? == "generateContent") | .name | ltrimstr("models/")' \
+        2>/dev/null | grep '^gemini' | sort)"
+      if [[ -n "$_fetched" ]]; then
+        printf '%s\n' "$_fetched"
+      else
+        printf '%s\n' \
+          "gemini-2.5-pro" \
+          "gemini-2.5-flash" \
+          "gemini-2.0-flash" \
+          "gemini-2.0-flash-lite" \
+          "gemini-1.5-pro" \
+          "gemini-1.5-flash"
+      fi
+      ;;
   esac
 }
 
@@ -263,6 +321,14 @@ clankers_check_deps() {
     openai)
       [[ -n "$LOL_CLANKERS_API_KEY" ]] || {
         err "OpenAI-compatible API requires LOL_CLANKERS_API_KEY to be set."
+        info "Run: lol config  or set it in ~/.config/lol/config.env"
+        return 1
+      }
+      ;;
+    gemini)
+      [[ -n "$LOL_CLANKERS_API_KEY" ]] || {
+        err "Gemini API requires LOL_CLANKERS_API_KEY to be set."
+        info "Get a key at https://aistudio.google.com/apikey"
         info "Run: lol config  or set it in ~/.config/lol/config.env"
         return 1
       }
@@ -513,6 +579,37 @@ _clankers_send_openai() {
     done
 }
 
+# Gemini — Google Gemini API, SSE streaming
+_clankers_send_gemini() {
+  local model="$1" system_prompt="$2" user_prompt="$3"
+  local endpoint="https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse"
+
+  local payload
+  payload="$(jq -n \
+    --arg system "$system_prompt" \
+    --arg user   "$user_prompt" \
+    '{
+      system_instruction: {parts: [{text: $system}]},
+      contents: [{role: "user", parts: [{text: $user}]}],
+      generationConfig: {maxOutputTokens: 2048}
+    }')"
+
+  curl -sN "$endpoint" \
+    -H "x-goog-api-key: ${LOL_CLANKERS_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      local text; text="$(printf '%s' "$json" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)"
+      [[ -n "$text" ]] && printf '%s' "$text"
+      local out_tok; out_tok="$(printf '%s' "$json" | jq -r '.usageMetadata.candidatesTokenCount // empty' 2>/dev/null)"
+      if [[ -n "$out_tok" && "$out_tok" != "0" ]]; then
+        printf "\n\n${DIM}%s output tokens${RESET}\n" "$out_tok"
+      fi
+    done
+}
+
 # Dispatcher — routes to the appropriate backend
 _clankers_send() {
   local backend="${LOL_CLANKERS_BACKEND:-ollama}"
@@ -520,6 +617,7 @@ _clankers_send() {
     claude)  _clankers_send_claude  "$@" ;;
     vertex)  _clankers_send_vertex  "$@" ;;
     openai)  _clankers_send_openai  "$@" ;;
+    gemini)  _clankers_send_gemini  "$@" ;;
     *)       _clankers_send_ollama  "$@" ;;
   esac
 }
@@ -1050,6 +1148,45 @@ _clankers_chat_openai() {
     done
 }
 
+# Gemini — multi-turn chat; converts from Claude message format (role+content) to
+# Gemini format (role+parts) so the rest of clankers_ask() needs no special-casing.
+_clankers_chat_gemini() {
+  local model="$1" system="$2" messages="$3"
+  local endpoint="https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse"
+
+  # Claude uses role "assistant"; Gemini uses "model"
+  local gemini_messages
+  gemini_messages="$(printf '%s' "$messages" | jq '[.[] | {
+    role: (if .role == "assistant" then "model" else .role end),
+    parts: [{text: .content}]
+  }]')"
+
+  local payload
+  payload="$(jq -n \
+    --arg system "$system" \
+    --argjson msgs "$gemini_messages" \
+    '{
+      system_instruction: {parts: [{text: $system}]},
+      contents: $msgs,
+      generationConfig: {maxOutputTokens: 2048}
+    }')"
+
+  curl -sN "$endpoint" \
+    -H "x-goog-api-key: ${LOL_CLANKERS_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+  | while IFS= read -r line; do
+      [[ "$line" == data:* ]] || continue
+      local json="${line#data: }"
+      local text; text="$(printf '%s' "$json" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)"
+      [[ -n "$text" ]] && printf '%s' "$text"
+      local out_tok; out_tok="$(printf '%s' "$json" | jq -r '.usageMetadata.candidatesTokenCount // empty' 2>/dev/null)"
+      if [[ -n "$out_tok" && "$out_tok" != "0" ]]; then
+        printf "\n\n${DIM}%s output tokens${RESET}\n" "$out_tok"
+      fi
+    done
+}
+
 # Dispatcher for multi-turn chat
 _clankers_chat() {
   local backend="${LOL_CLANKERS_BACKEND:-ollama}"
@@ -1057,6 +1194,7 @@ _clankers_chat() {
     claude)  _clankers_chat_claude  "$@" ;;
     vertex)  _clankers_chat_vertex  "$@" ;;
     openai)  _clankers_chat_openai  "$@" ;;
+    gemini)  _clankers_chat_gemini  "$@" ;;
     *)       _clankers_chat_ollama  "$@" ;;
   esac
 }

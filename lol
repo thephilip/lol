@@ -1782,6 +1782,7 @@ cmd_config() {
       claude) echo "claude-haiku-4-5-20251001" ;;
       vertex) echo "claude-haiku-4-5@20251001" ;;
       openai) echo "gpt-4o-mini" ;;
+      gemini) echo "gemini-2.0-flash" ;;
       *)      echo "gemma2:2b" ;;
     esac
   }
@@ -1801,6 +1802,7 @@ cmd_config() {
       ollama) opts+=("Endpoint   → ${api}") ;;
       openai) opts+=("Endpoint   → ${api}" "API key    → ${key_display}") ;;
       claude) opts+=("API key    → ${key_display}") ;;
+      gemini) opts+=("API key    → ${key_display}") ;;
       vertex) opts+=("GCP project → ${vertex_project:-(auto-detect)}"
                      "GCP region  → ${vertex_region}"
                      "Model Garden (view available models in browser)") ;;
@@ -1817,7 +1819,8 @@ cmd_config() {
           "ollama  — local model via Ollama (privacy-safe, no API key needed)" \
           "claude  — Anthropic Claude API (requires API key)" \
           "vertex  — Claude via Google Cloud Vertex AI (uses gcloud credentials)" \
-          "openai  — OpenAI-compatible endpoint (OpenAI, Azure, LM Studio, etc.)")"
+          "openai  — OpenAI-compatible endpoint (OpenAI, Azure, LM Studio, etc.)" \
+          "gemini  — Google Gemini API (requires API key from Google AI Studio)")"
         case "$new_backend" in
           ollama*)
             backend="ollama"; model="$(_default_model ollama)"; api="http://localhost:11434"
@@ -1842,6 +1845,10 @@ cmd_config() {
             ;;
           openai*)
             backend="openai"; model="$(_default_model openai)"
+            ;;
+          gemini*)
+            backend="gemini"; model="$(_default_model gemini)"
+            info "Get a free API key at https://aistudio.google.com/apikey"
             ;;
         esac
         [[ -n "$new_backend" ]] && changed=true
