@@ -3,7 +3,7 @@
 > A must-gather inspector for OpenShift / ROSA.
 > Named in the proud tradition of [`omg`](https://github.com/ryane/omg) and [`omc`](https://github.com/gmeghnag/omc).
 
-`lol` is a Bash CLI that wraps [`omc`](https://github.com/gmeghnag/omc) with persistent **named contexts**, automated **check runs**, **signature-based issue fingerprinting**, and an AI-ready **handoff document** generator. It is designed for support engineers and SREs who spend a lot of time digging through must-gather bundles.
+`lol` is a Bash CLI that wraps [`omc`](https://github.com/gmeghnag/omc) with persistent **named contexts**, automated **check runs**, **signature-based issue fingerprinting**, an **AI chat** interface (`lol ask`), and an AI-ready **handoff document** generator. It is designed for support engineers and SREs who spend a lot of time digging through must-gather bundles.
 
 > **Status:** Early development. Commands and file formats may change. Contributions welcome.
 
@@ -265,6 +265,13 @@ lol check etcd
 # Generate an AI handoff document
 lol ready-up -o handoff.md
 
+# Ask the AI a question about the active must-gather (interactive, with tool use)
+lol ask "Why are the etcd members flapping?"
+lol ask   # start an interactive session with no initial question
+
+# One-shot AI query attached to a check run
+lol check etcd --with-clankers "is the disk latency related to the etcd issues?"
+
 # See what's in the active context
 lol status
 lol context show
@@ -285,9 +292,28 @@ lol version
 
 ---
 
-## clankers — local AI analysis
+## AI analysis
 
-`--with-clankers` feeds a natural-language query to a local model via [ollama](https://ollama.ai), using targeted must-gather data as context.
+### lol ask
+
+`lol ask` is the primary AI interface — a multi-turn chat session with cluster context loaded automatically. On Claude and Vertex backends it supports tool use, meaning the AI can run `omc` commands, read previous findings, and write new ones during the conversation.
+
+```bash
+# Ask a question about the active must-gather
+lol ask "Why are the etcd members flapping?"
+
+# Start an interactive session with no initial question
+lol ask
+
+# Skip logging this session to commands.log
+lol ask --no-log "quick sanity check"
+```
+
+The AI is given the active must-gather path, OCP version, firing alerts, and any findings already recorded in the context. On Claude and Vertex backends, it can also issue `omc` commands during the conversation to dig deeper.
+
+### lol check --with-clankers
+
+`--with-clankers` feeds a one-shot natural-language query to the AI after (or instead of) running checks, using targeted must-gather data as context. Use this for a quick AI take without starting an interactive session.
 
 ```bash
 # AI-only (no standard checks)
@@ -300,13 +326,17 @@ lol check etcd --with-clankers "is the disk latency related to the etcd issues?"
 lol check --with-clankers "What's wrong with ingress" --clankers-model llama3.2:3b
 ```
 
-**Setup:**
+`lol` infers the relevant namespace(s) from keywords in your query (`marketplace`, `etcd`, `ingress`, etc.) and gathers targeted pod status, warning events, and logs from problem pods. Broad cluster-level data (cluster operators, nodes, alerts) is used when no specific component is inferred. Context is capped to keep the prompt within small model limits.
+
+### Setup & configuration
+
+**Local models (ollama):**
 ```bash
 # Install ollama: https://ollama.ai
 ollama pull gemma2:2b          # default model (~1.6 GB)
 ```
 
-**Configuration** — create `~/.config/lol/config.env` to set persistent overrides:
+**Persistent config** — create `~/.config/lol/config.env`:
 ```bash
 LOL_CLANKERS_MODEL=llama3.2:3b
 LOL_CLANKERS_API=http://localhost:11434
@@ -317,14 +347,12 @@ LOL_CLANKERS_API=http://localhost:11434
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOL_QUIET=1` | off | Suppress the `$ <command>` trace printed before each wrapped `omc`/`oc`/`ocm` call |
-| `LOL_CLANKERS_MODEL` | `gemma2:2b` | AI model for `lol check --with-clankers` and `lol ask` |
+| `LOL_CLANKERS_MODEL` | `gemma2:2b` | AI model for `lol ask` and `--with-clankers` |
 | `LOL_CLANKERS_BACKEND` | `ollama` | AI backend (`ollama`, `claude`, `vertex`, `openai`, `gemini`) |
 | `LOL_CLANKERS_API` | `http://localhost:11434` | Endpoint for `ollama`/`openai` backends |
 | `LOL_CLANKERS_API_KEY` | — | API key for `claude`/`openai`/`gemini` backends |
 | `LOL_VERTEX_PROJECT` | auto-detect | GCP project ID for the `vertex` backend |
 | `LOL_VERTEX_REGION` | `us-east5` | GCP region for the `vertex` backend |
-
-lol infers the relevant namespace(s) from keywords in your query (`marketplace`, `etcd`, `ingress`, etc.) and gathers targeted pod status, warning events, and logs from problem pods. Broad cluster-level data (cluster operators, nodes, alerts) is used when no specific component is inferred. Context is capped to keep the prompt within small model limits.
 
 ## OCM integration
 
