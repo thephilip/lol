@@ -21,7 +21,7 @@ unset _lol_cfg
 
 source "$SCRIPT_DIR/lib/clankers.sh"
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 CHECKS_DIR="$SCRIPT_DIR/checks"
 
 usage() {
@@ -129,7 +129,8 @@ ctx_set() {
   local meta; meta="$(ctx_meta "$name")"
   mkdir -p "$(ctx_dir "$name")/runs"
   if [[ -f "$meta" ]] && grep -q "^${key}=" "$meta"; then
-    sed -i'' "s|^${key}=.*|${key}=${value}|" "$meta"
+    local _tmp; _tmp="$(mktemp)"
+    sed "s|^${key}=.*|${key}=${value}|" "$meta" > "$_tmp" && mv "$_tmp" "$meta"
   else
     echo "${key}=${value}" >> "$meta"
   fi
@@ -221,7 +222,7 @@ cmd_use() {
   [[ -z "$path" ]] && { err "Usage: lol use <must-gather-path>"; exit 1; }
   [[ ! -d "$path" ]] && { err "Not a directory: $path"; exit 1; }
 
-  path="$(realpath "$path")"
+  path="$(cd "$path" && pwd -P)"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%S)"
   mkdir -p "$LOL_CONFIG_DIR"
 

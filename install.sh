@@ -42,7 +42,7 @@ uninstall() {
 
   if [[ -d "$INSTALL_DIR" ]]; then
     read -rp "Remove install directory $INSTALL_DIR? [y/N] " confirm
-    if [[ "${confirm,,}" == "y" ]]; then
+    if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
       rm -rf "$INSTALL_DIR"
       ok "Removed: $INSTALL_DIR"
     else
@@ -53,7 +53,7 @@ uninstall() {
   local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/lol"
   if [[ -d "$config_dir" ]]; then
     read -rp "Remove context data at $config_dir? [y/N] " confirm
-    if [[ "${confirm,,}" == "y" ]]; then
+    if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
       rm -rf "$config_dir"
       ok "Removed: $config_dir"
     else
@@ -69,7 +69,7 @@ uninstall() {
     "$HOME/.zsh/completions/_lol"; do
     if [[ -f "$candidate" ]]; then
       read -rp "Remove zsh completion at $candidate? [y/N] " confirm
-      if [[ "${confirm,,}" == "y" ]]; then
+      if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
         rm -f "$candidate"
         ok "Removed: $candidate"
       else
@@ -83,7 +83,7 @@ uninstall() {
   for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
     if [[ -f "$rc" ]] && grep -qF 'lol shell-init' "$rc" 2>/dev/null; then
       read -rp "Remove lol shell integration from $rc? [Y/n] " confirm
-      if [[ "${confirm,,}" != "n" ]]; then
+      if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" != "n" ]]; then
         grep -vF 'lol shell-init' "$rc" \
           | grep -v '^# lol shell integration$' \
           > "${rc}.loltmp" && mv "${rc}.loltmp" "$rc"
@@ -174,7 +174,7 @@ install() {
 
     if [[ -n "$comp_dest" ]]; then
       read -rp "  Install zsh completion to $comp_dest/_lol? [Y/n] " confirm
-      if [[ "${confirm,,}" != "n" ]]; then
+      if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" != "n" ]]; then
         cp "$comp_src" "$comp_dest/_lol"
         ok "Installed: $comp_dest/_lol"
       else
@@ -212,7 +212,7 @@ install() {
       ok "Shell integration already present in $rc_file"
     else
       read -rp "  Add shell integration to $rc_file? [Y/n] " confirm
-      if [[ "${confirm,,}" != "n" ]]; then
+      if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" != "n" ]]; then
         printf '\n# lol shell integration\n%s\n' "$eval_line" >> "$rc_file"
         ok "Added to $rc_file"
         info "Restart your shell or run: source $rc_file"

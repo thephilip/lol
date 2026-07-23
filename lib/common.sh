@@ -127,7 +127,7 @@ _tui_confirm() {
   else
     local _r
     read -rp "  ${prompt} [y/N] " _r
-    [[ "${_r,,}" == "y" ]]
+    [[ "$(printf '%s' "$_r" | tr '[:upper:]' '[:lower:]')" == "y" ]]
   fi
 }
 

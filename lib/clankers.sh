@@ -1315,7 +1315,7 @@ clankers_ask() {
       else
         read -rp "You: " user_input
       fi
-      [[ -z "$user_input" || "${user_input,,}" =~ ^(exit|quit|q)$ ]] && break
+      [[ -z "$user_input" || "$(printf '%s' "$user_input" | tr '[:upper:]' '[:lower:]')" =~ ^(exit|quit|q)$ ]] && break
     fi
 
     # Add user message to history

@@ -13,3 +13,6 @@ mg-*/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# MCP config
+.mcp.json
